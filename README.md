@@ -2,8 +2,8 @@
 
 A real-time Indic speech-to-speech call translator. Speech recognition, translation
 and speech synthesis models run on one GPU, chained by a call orchestrator built on
-self-hosted LiveKit: two people on a call each speak their own language and hear
-the other in the language they choose. See
+self-hosted LiveKit: everyone on a call speaks their own language and hears the others
+in the language they choose (tested with two and three people). See
 [Translated calls](#translated-calls-livekit) for the call stack.
 
 The models run in **NVIDIA NIM containers** wherever NVIDIA supports them. The one
@@ -323,17 +323,21 @@ plays the speaker's own voice. Otherwise the page plays only the translation; an
 
 **Translation route.** Fixed by the model: a turn with English on either side is one
 call; between two Indian languages the agent goes through English (`route()` in
-`agent.py`). Captions show the English step ("via English") when the page's setting
+`agent.py`). That English step runs once per sentence and serves every listener
+language, and it is the translation for anyone who hears English. Captions show the English step ("via English") when the page's setting
 is on. Going through English can lose register: once, a formal "you" came back as
 the informal "உனக்கு" in Tamil.
 
 **Per utterance:** the agent takes the caller's mic (16 kHz; echo-cancelled when playout
 leaks into it, see below), runs Silero VAD on it (`services/s2s/app/vad.py`, CPU) and
-sends each finished utterance to the ASR NIM (`services/s2s/app/asr.py`). On each final transcript, it
-translates once per target language (streaming the text as captions) and hands the
-result to each listener's TTS socket, which plays utterances in order. Each
-listener's track only lets that listener subscribe (publisher-side permissions).
-Transcripts, translations and per-utterance latency go to both callers on the
+sends each finished utterance to the ASR NIM (`services/s2s/app/asr.py`). On each final
+transcript, it translates into every listener language at the same time (streaming the
+text as captions), and each language goes to its listeners' TTS sockets as soon as it is
+ready; TTS plays utterances in order. Each listener's track only lets that listener
+subscribe (publisher-side permissions). Every listener gets their own synthesized voice,
+so one person speaking in a call of N people means N−1 voices at once: TTS (6–7
+real-time voices) keeps calls up to about 5–7 people smooth.
+Transcripts, translations and per-utterance latency go to every caller on the
 `captions` data topic: `transcript`, `translation`, `metrics` and `status`
 messages, see `agent.py`.
 
@@ -358,6 +362,25 @@ WAV files as microphones) showed the same captions and 1.1–1.6 s delays on the
 
 ```bash
 docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test.py
+```
+
+**Three people** (`clients/call_test3.py`): Asha (Hindi), Bala (Tamil) and Chitra
+(Malayalam; the clip is our own TTS) each take a turn, each hearing their own language;
+then Bala switches to English. Times are when each listener heard the translation, from
+the moment the speaker stopped:
+
+| Speaker | First listener | Second listener |
+|---|---|---|
+| Asha (Hindi) | Bala (Tamil) 1.92 s | Chitra (Malayalam) 1.89 s |
+| Chitra (Malayalam) | Asha (Hindi) 1.87 s | Bala (Tamil) 2.05 s |
+| Asha (Hindi) | Bala (English) 1.74 s | Chitra (Malayalam) 2.24 s |
+
+Before the languages ran in parallel with a shared English step, the second listener
+waited for the first: 3.28 s and 3.12 s in the same turns. Every listener receives only
+their own translated track.
+
+```bash
+docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test3.py
 ```
 
 **Echo protection.** A browser's echo cancellation removes only its own speaker's sound.

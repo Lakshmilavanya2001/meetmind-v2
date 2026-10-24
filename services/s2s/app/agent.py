@@ -144,11 +144,20 @@ class TranslateClient:
                         await on_delta("".join(parts))
         return "".join(parts).strip()
 
-    async def translate(self, text: str, src: str, tgt: str, on_delta) -> tuple[str, dict]:
+    async def to_english(self, text: str, on_delta=None) -> str:
+        return await self._complete(" ".join(text.split()), "English", on_delta)
+
+    async def translate(self, text: str, src: str, tgt: str, on_delta,
+                        english: asyncio.Future | None = None) -> tuple[str, dict]:
+        """`english`: the sentence's English translation, already under way. Between two
+        Indian languages the model goes through English, and one English step per
+        sentence serves every target language (and is the translation into English)."""
         text = " ".join(text.split())
+        if tgt == "en" and english is not None:
+            return await english, {"route": "direct"}
         if route(src, tgt) == "pivot":
-            english = await self._complete(text, "English")
-            return await self._complete(english, PROMPT_NAME[tgt], on_delta), {"route": "pivot", "pivot_text": english}
+            en = await english if english is not None else await self._complete(text, "English")
+            return await self._complete(en, PROMPT_NAME[tgt], on_delta), {"route": "pivot", "pivot_text": en}
         return await self._complete(text, PROMPT_NAME[tgt], on_delta), {"route": "direct"}
 
     async def close(self):
@@ -625,44 +634,54 @@ class CallTranslator:
             log.warning("asr error for %s: %s", inp.identity, m.get("message"))
 
     async def utterance_worker(self, ident: str):
-        """One speaker's utterances, in order: translate, then hand to each listener's
-        TTS (which queues), then move on - the next translation overlaps playback."""
+        """One speaker's utterances, in order. Each one is translated into every listener
+        language at once, and each language goes to its listeners' TTS (which queues) as
+        soon as it is ready; then on to the next utterance, which overlaps playback."""
         q = self.queues[ident]
         while True:
             utt: Utterance = await q.get()
             speaker = self.callers.get(ident)
             if speaker is None:
                 continue
-            listeners = [c for c in self.callers.values() if c.identity != ident]
             by_lang: dict[str, list[Caller]] = {}
-            for c in listeners:
-                if c.hear != speaker.speak:
+            for c in self.callers.values():
+                if c.identity != ident and c.hear != speaker.speak:
                     by_lang.setdefault(c.hear, []).append(c)
-            for lang, group in by_lang.items():
-                try:
-                    t0 = time.time()
+            english = None              # shared English step, when some language needs it
+            if any(route(speaker.speak, lang) == "pivot" for lang in by_lang):
+                en_delta = (lambda t: self.translation_delta(utt, ident, "en", t)) if "en" in by_lang else None
+                english = asyncio.ensure_future(self.translator.to_english(utt.text, en_delta))
+            await asyncio.gather(*(self.deliver(utt, speaker, lang, group, english)
+                                   for lang, group in by_lang.items()))
 
-                    async def on_delta(text, lang=lang):
-                        if "translate_first" not in utt.marks:
-                            utt.marks["translate_first"] = time.time()
-                        await self.send({"type": "translation", "utt": utt.id, "speaker": ident,
-                                         "lang": lang, "text": text, "final": False})
+    async def translation_delta(self, utt: Utterance, ident: str, lang: str, text: str):
+        if "translate_first" not in utt.marks:
+            utt.marks["translate_first"] = time.time()
+        await self.send({"type": "translation", "utt": utt.id, "speaker": ident,
+                         "lang": lang, "text": text, "final": False})
 
-                    text, stats = await self.translator.translate(utt.text, speaker.speak, lang, on_delta)
-                    utt.marks[f"translated:{lang}"] = time.time()
-                    if LOG_TEXT:
-                        log.info("translated %s -> %s: %s", utt.id, lang, text)
-                    await self.send({"type": "translation", "utt": utt.id, "speaker": ident, "lang": lang,
-                                     "text": text, "final": True, "ms": round((time.time() - t0) * 1000),
-                                     "route": stats.get("route"), "pivot_text": stats.get("pivot_text")})
-                    if text:
-                        self.remember_played(lang, text)
-                    for c in group:
-                        if c.identity in self.outputs and text:
-                            await self.outputs[c.identity].say(utt, text, lang, speaker.voice)
-                except Exception as e:  # noqa: BLE001
-                    log.exception("translation of %s failed", utt.id)
-                    await self.status(f"translation failed: {e}")
+    async def deliver(self, utt: Utterance, speaker: Caller, lang: str, group: list[Caller],
+                      english: asyncio.Future | None):
+        """Translate one utterance into one language and queue it for that language's listeners."""
+        ident = speaker.identity
+        try:
+            t0 = time.time()
+            text, stats = await self.translator.translate(
+                utt.text, speaker.speak, lang, lambda t: self.translation_delta(utt, ident, lang, t), english)
+            utt.marks[f"translated:{lang}"] = time.time()
+            if LOG_TEXT:
+                log.info("translated %s -> %s: %s", utt.id, lang, text)
+            await self.send({"type": "translation", "utt": utt.id, "speaker": ident, "lang": lang,
+                             "text": text, "final": True, "ms": round((time.time() - t0) * 1000),
+                             "route": stats.get("route"), "pivot_text": stats.get("pivot_text")})
+            if text:
+                self.remember_played(lang, text)
+            for c in group:
+                if c.identity in self.outputs and text:
+                    await self.outputs[c.identity].say(utt, text, lang, speaker.voice)
+        except Exception as e:  # noqa: BLE001
+            log.exception("translation of %s into %s failed", utt.id, lang)
+            await self.status(f"translation failed: {e}")
 
     async def utterance_audio_done(self, utt: Utterance, listener: str, tts: dict):
         """Per-utterance latency, measured from the moment the speaker stopped talking."""
