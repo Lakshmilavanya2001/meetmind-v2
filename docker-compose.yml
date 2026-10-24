@@ -1,0 +1,215 @@
+# Indic speech model services (ASR, translation, TTS) and the translated-call stack on
+# top of them (LiveKit, agent worker, demo web app, HTTPS proxy).
+#
+#   docker login nvcr.io -u '$oauthtoken'   # once; password: the NGC key (NVIDIA_API_KEY in .env)
+#   docker compose up -d --build            # first start compiles graphs
+#   docker compose ps                        # wait for the model services to be "healthy"
+#   https://$PUBLIC_HOST:8443                # the call demo
+#
+# The models run in NVIDIA NIM containers wherever NVIDIA supports them:
+#   asr       AI4Bharat IndicConformer (5 languages) on NVIDIA's Riva ASR NIM
+#   translate sarvam-translate, model-free LLM NIM (OpenAI API)
+#   tts-lm    indic-speak's speech LM, model-free LLM NIM (OpenAI completions, token ids)
+#   tts       indic-speak's audio decoder (SNAC + Vocos) and streaming API: our own image,
+#             since no NIM turns audio tokens into sound
+# All share one GPU and start one after another (depends_on: service_healthy), because
+# each engine sizes its memory from what is free when it starts.
+# Each NIM keeps its cache (downloaded models, compile caches) in ./nim-cache/<service>,
+# NVIDIA's LOCAL_NIM_CACHE pattern; the directories must be writable by uid 1000.
+# Model service ports bind to localhost only: their APIs have no authentication.
+# Exposed on the network: 8443 (HTTPS page + LiveKit signaling, token-gated),
+# 7881/tcp and 50000-50200/udp (WebRTC media).
+
+name: indic-speech
+
+x-gpu: &gpu
+  driver: nvidia
+  device_ids: ["${GPU_ID:-0}"]
+  capabilities: [gpu]
+
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 3
+  start_period: 20m                     # first start downloads models from NGC
+
+services:
+  # AI4Bharat IndicConformer (one 120M Conformer-CTC model per language: Malayalam, Hindi,
+  # Kannada, Telugu, Tamil), converted with NVIDIA's nemo2riva + riva-build and served by
+  # NVIDIA's Riva ASR NIM, following NVIDIA's custom-model procedure: model download off,
+  # the model repository from ./nim-export/asr-indic/custom_model.tar.gz (built by
+  # services/asr-nim/build). The Whisper NIM image is used as the Riva runtime.
+  #   HTTP  POST /v1/audio/transcriptions (file, language=ml-IN|hi-IN|kn-IN|te-IN|ta-IN)
+  #   gRPC: Riva ASR API
+  asr:
+    image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8001:9000"     # HTTP
+      - "${BIND_ADDR:-127.0.0.1}:50051:50051"   # gRPC
+    shm_size: 8gb
+    volumes:
+      - ./nim-export/asr-indic:/opt/nim/export
+      - ./services/asr-nim/healthcheck.py:/opt/healthcheck.py:ro
+    environment:
+      NGC_API_KEY: ${NVIDIA_API_KEY}
+      NIM_DISABLE_MODEL_DOWNLOAD: "true"
+      NIM_EXPORT_PATH: /opt/nim/export
+      NIM_HTTP_API_PORT: "9000"
+      NIM_GRPC_API_PORT: "50051"
+    deploy: {resources: {reservations: {devices: [*gpu]}}}
+    healthcheck:
+      <<: *health
+      timeout: 60s                      # the first check sends the warm-up requests
+      test: ["CMD", "python3", "/opt/healthcheck.py"]
+
+  # sarvamai/sarvam-translate (Gemma 3 4B, 22 Indian languages + English) on NVIDIA's
+  # model-free LLM NIM, serving the local checkpoint. OpenAI API: POST /v1/chat/completions.
+  translate:
+    image: nvcr.io/nim/nvidia/model-free-nim:2.0.13
+    restart: unless-stopped
+    ports: ["${BIND_ADDR:-127.0.0.1}:8002:8000"]
+    shm_size: 2g
+    volumes:
+      - ./models/sarvam-translate:/models/sarvam-translate:ro
+      - ${LOCAL_NIM_CACHE:-./nim-cache}/translate:/opt/nim/.cache
+      - ./services/translate-nim/healthcheck.py:/opt/healthcheck.py:ro
+    environment:
+      NIM_MODEL_PATH: /models/sarvam-translate
+      NIM_SERVED_MODEL_NAME: sarvam-translate
+    command:                            # vLLM engine flags, passed straight through
+      - --dtype
+      - bfloat16
+      - --max-model-len
+      - "4096"
+      # The NIM's vLLM 0.28 reserves too little KV cache at a GPU share, so pin its size
+      - --kv-cache-memory-bytes
+      - "4294967296"                    # 4 GiB
+      - --max-num-seqs
+      - "64"
+      # small prefill chunks: live requests are short, and the activation peak
+      # (logits over a 262k vocab) is what eats the memory budget
+      - --max-num-batched-tokens
+      - "1024"
+      - --enable-prefix-caching
+      - --language-model-only           # text in, text out: skip the vision tower
+    deploy: {resources: {reservations: {devices: [*gpu]}}}
+    depends_on: {asr: {condition: service_healthy}}
+    healthcheck:
+      <<: *health
+      timeout: 60s                      # the first check sends the warm-up requests
+      test: ["CMD", "python3", "/opt/healthcheck.py"]
+
+  # bodhan-ai/indic-speak's speech LM (Llama-3.2-3B emitting SNAC audio tokens) on the
+  # model-free LLM NIM. The tts service sends token-id prompts to /v1/completions and
+  # streams the generated token ids back; it warms this server up when it starts.
+  tts-lm:
+    image: nvcr.io/nim/nvidia/model-free-nim:2.0.13
+    restart: unless-stopped
+    ports: ["${BIND_ADDR:-127.0.0.1}:8004:8000"]
+    shm_size: 2g
+    volumes:
+      - ./models/indic-speak:/models/indic-speak:ro
+      - ${LOCAL_NIM_CACHE:-./nim-cache}/tts-lm:/opt/nim/.cache
+    environment:
+      NIM_MODEL_PATH: /models/indic-speak
+      NIM_SERVED_MODEL_NAME: indic-speak
+    command:
+      - --dtype
+      - bfloat16
+      - --max-model-len
+      - "4096"                          # the tts service's MAX_MODEL_LEN must match
+      - --kv-cache-memory-bytes
+      - "5368709120"                    # 5 GiB
+      - --max-num-seqs
+      - "32"
+      - --max-num-batched-tokens
+      - "1024"
+      - --enable-prefix-caching
+    deploy: {resources: {reservations: {devices: [*gpu]}}}
+    depends_on: {translate: {condition: service_healthy}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health/ready')"]
+
+  # indic-speak's audio side: SNAC codes -> Vocos waveform, streamed, plus the TTS API
+  # (POST /v1/tts, WS /v1/stream). Our image: slim Python + CUDA torch, no vLLM.
+  tts:
+    build: ./services/tts
+    image: indic-tts-decoder:0.2
+    restart: unless-stopped
+    ports: ["${BIND_ADDR:-127.0.0.1}:8003:8003"]
+    volumes: ["./models:/models:ro"]    # tokenizer, Vocos and SNAC weights
+    environment:
+      TTS_LM_URL: http://tts-lm:8000/v1
+      MAX_MODEL_LEN: "4096"
+      TTS_CONTEXT_RIGHT: "4"            # vocoder lookahead frames; 2 = ~140 ms faster, small artifacts
+      TTS_REPETITION_PENALTY: "1.2"
+    deploy: {resources: {reservations: {devices: [*gpu]}}}
+    depends_on: {tts-lm: {condition: service_healthy}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+
+  # ---------------------------------------------------------------- the call
+  # Self-hosted LiveKit (WebRTC media server), the translation agent that joins
+  # every room, the demo web app, and an HTTPS proxy in front of the last two
+  # (browsers need HTTPS for the microphone). Host networking: WebRTC media goes
+  # straight to PUBLIC_HOST (UDP 50000-50200, TCP 7881).
+  livekit:
+    image: livekit/livekit-server:v1.13.9
+    restart: unless-stopped
+    network_mode: host
+    volumes: ["./services/livekit/livekit.yaml:/etc/livekit.yaml:ro"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    command: ["--config", "/etc/livekit.yaml", "--node-ip", "${PUBLIC_HOST}"]
+
+  s2s-agent:
+    build: ./services/s2s
+    image: indic-s2s:0.1
+    restart: unless-stopped
+    network_mode: host
+    command: ["python", "-m", "app.agent", "start"]
+    environment:
+      LIVEKIT_URL: ws://127.0.0.1:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      ASR_URL: http://127.0.0.1:8001            # ASR NIM (Riva), HTTP
+      TRANSLATE_URL: http://127.0.0.1:8002/v1    # OpenAI-compatible (the NIM)
+      TRANSLATE_MODEL: sarvam-translate
+      TTS_URL: ws://127.0.0.1:8003/v1/stream
+      # Live captions of the speaker's words while they talk: re-transcribe the utterance so
+      # far every half second (~25 ms per request on the ASR NIM).
+      S2S_ASR_PARTIALS: ${S2S_ASR_PARTIALS:-1}
+      S2S_ASR_PARTIAL_INTERVAL_S: "0.5"
+      S2S_VAD_MIN_SILENCE_MS: "500"     # pause that ends an utterance
+      S2S_ECHO_CANCEL: ${S2S_ECHO_CANCEL:-1}  # cancel the room's translated audio out of every mic
+      S2S_LOG_TEXT: ${S2S_LOG_TEXT:-1}        # log transcripts and translations (debugging)
+    depends_on:
+      livekit: {condition: service_started}
+      tts: {condition: service_healthy}
+
+  s2s-web:
+    image: indic-s2s:0.1
+    restart: unless-stopped
+    network_mode: host
+    command: ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8090"]
+    environment:
+      LIVEKIT_URL: http://127.0.0.1:7880   # also re-dispatches the translator to rooms that lost it
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+    depends_on: [s2s-agent]
+
+  proxy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    volumes:
+      - ./services/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data                # Caddy's local CA (download root.crt to trust it)
+
+volumes:
+  caddy-data:

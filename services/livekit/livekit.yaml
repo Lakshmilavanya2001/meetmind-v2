@@ -1,0 +1,15 @@
+# Self-hosted LiveKit media server (SFU) for the translated-call demo.
+# Keys come from LIVEKIT_KEYS and the advertised IP from --node-ip (docker-compose.yml).
+port: 7880
+# signaling only on localhost: browsers reach it through the HTTPS proxy (wss://host:8443/rtc)
+bind_addresses: ["127.0.0.1"]
+rtc:
+  tcp_port: 7881              # ICE over TCP, fallback when UDP is blocked
+  port_range_start: 50000     # ICE over UDP
+  port_range_end: 50200
+  use_external_ip: false      # LAN deployment: advertise --node-ip, not a STUN-discovered address
+room:
+  empty_timeout: 120
+  departure_timeout: 20
+logging:
+  level: info

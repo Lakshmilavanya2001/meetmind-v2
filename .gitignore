@@ -1,0 +1,11 @@
+.env
+/models/
+/.venv/
+/testdata/out/
+__pycache__/
+# NIM caches and built model repositories (large, rebuilt by docker compose / build.sh)
+/nim-cache/
+/nim-export/
+/build/
+# local certificate exports
+caddy-root.crt

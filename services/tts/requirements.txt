@@ -1,0 +1,9 @@
+soxr==1.1.0
+soundfile==0.13.1
+numpy==2.2.6
+einops==0.8.2
+huggingface-hub==1.33.0
+transformers==5.17.0              # tokenizer only (prompt building)
+fastapi==0.136.3
+uvicorn[standard]==0.54.0
+aiohttp==3.14.5                   # streams token ids from the speech-LM NIM

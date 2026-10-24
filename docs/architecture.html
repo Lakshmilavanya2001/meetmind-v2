@@ -1,0 +1,347 @@
+<title>Indic Call Translator Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+Devanagari:wght@500&family=Noto+Sans+Tamil:wght@500&display=swap">
+<style>
+/* Layout: one reading column; diagrams scroll sideways inside their own frame on phones. */
+:root {
+  --bg: #f3f5f7;          /* cool paper */
+  --fg: #17202b;          /* slate ink: text, data arrows */
+  --muted: #5a6677;       /* labels, control-plane arrows */
+  --panel: #e5e9ee;       /* groups: call stack, model services */
+  --node: #ffffff;        /* components */
+  --line: #c4ccd6;        /* component outlines */
+  --audio: #c2410c;       /* the audio path, the one thing in colour */
+  --audio-soft: #f9e1d3;  /* model stages in the timeline */
+  --wait: #d9dfe6;        /* waiting segments in the timeline */
+  --sans: "IBM Plex Sans", "Noto Sans Devanagari", "Noto Sans Tamil", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --fg: #e3e8ee; --muted: #93a0b1; --panel: #18202a; --node: #1f2833;
+    --line: #36434f; --audio: #ff8a4c; --audio-soft: #43271a; --wait: #28323e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --fg: #e3e8ee; --muted: #93a0b1; --panel: #18202a; --node: #1f2833;
+  --line: #36434f; --audio: #ff8a4c; --audio-soft: #43271a; --wait: #28323e; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--sans); }
+.wrap {
+  max-width: 1160px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 56px;
+  display: grid; gap: 40px;
+}
+header { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { font: 500 13px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--audio); margin: 0; }
+h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font-size: 21px; font-weight: 600; margin: 0 0 6px; text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--muted); font-size: 17px; }
+code { font: 14px var(--mono); }
+
+figure { margin: 0; display: grid; gap: 12px; min-width: 0; }
+.frame { overflow-x: auto; background: var(--node); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.frame svg { display: block; width: 100%; height: auto; }
+.frame.wide svg { min-width: 900px; }
+.frame.timeline svg { min-width: 720px; }
+figcaption { color: var(--muted); font-size: 15px; max-width: 80ch; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 14px; color: var(--muted); list-style: none; margin: 0; padding: 0; }
+.legend li { display: flex; align-items: center; gap: 8px; }
+.legend svg { width: 34px; height: 10px; flex: none; }
+
+section { display: grid; gap: 14px; min-width: 0; }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; margin: 0; padding: 0; list-style: none; }
+.notes li { border-top: 1px solid var(--line); padding-top: 12px; min-width: 0; }
+.notes b { display: block; font-weight: 600; margin-bottom: 2px; }
+.notes span { color: var(--muted); font-size: 15px; }
+footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
+
+/* ---- diagram vocabulary ---- */
+svg { font-family: var(--sans); }
+.host { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 2 4; }
+.panel { fill: var(--panel); }
+.node { fill: var(--node); stroke: var(--line); stroke-width: 1.2; }
+.t-title { font-size: 13.5px; font-weight: 600; fill: var(--fg); }
+.t-sub { font-size: 11.5px; fill: var(--muted); }
+.t-mono { font: 11px var(--mono); fill: var(--muted); }
+.t-group { font: 500 11px var(--mono); letter-spacing: .05em; text-transform: uppercase; fill: var(--muted); }
+.t-list-h { font-size: 11px; font-weight: 600; fill: var(--fg); letter-spacing: .02em; }
+.t-list { font-size: 11.5px; fill: var(--muted); }
+.t-script { font: 500 12px "Noto Sans Devanagari", "Noto Sans Tamil", var(--sans); fill: var(--fg); }
+.t-edge { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--node); stroke-width: 4px; stroke-linejoin: round; }  /* halo: lines pass behind labels */
+.t-edge.audio { fill: var(--audio); font-weight: 500; }
+.t-edge.text { fill: var(--fg); }
+.e-audio { stroke: var(--audio); stroke-width: 2; fill: none; }
+.e-text { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+.e-ctl { stroke: var(--muted); stroke-width: 1.3; stroke-dasharray: 5 4; fill: none; }
+.mk-audio { fill: var(--audio); }
+.mk-text { fill: var(--fg); }
+.mk-ctl { fill: var(--muted); }
+.seg-wait { fill: var(--wait); }
+.seg-model { fill: var(--audio-soft); stroke: var(--audio); stroke-width: 1; }
+.seg-net { fill: var(--wait); }
+.seg-sep { stroke: var(--node); stroke-width: 2; }
+.t-seg { font-size: 11.5px; fill: var(--fg); }
+.t-row { font-size: 13px; font-weight: 600; fill: var(--fg); }
+.t-row-sub { font-size: 11px; fill: var(--muted); }
+.t-end { font: 500 12px var(--mono); fill: var(--fg); }
+.axis { stroke: var(--line); stroke-width: 1; }
+.t-tick { font: 11px var(--mono); fill: var(--muted); }
+
+@media (max-width: 600px) {
+  .wrap { padding-block: 28px 40px; gap: 32px; }
+  .lede { font-size: 16px; }
+}
+</style>
+
+<main class="wrap">
+  <header>
+    <p class="eyebrow">Architecture · October 2026</p>
+    <h1>Indic Call Translator</h1>
+    <p class="lede">Two people on a browser call each speak their own Indian language and hear the other
+      translated into the language they chose, with live captions. Everything runs on one GPU host:
+      three model services and a LiveKit-based call stack in front of them.</p>
+  </header>
+
+  <!-- ================================================================ system -->
+  <figure>
+    <div class="frame wide">
+      <svg viewBox="0 0 1120 580" role="img"
+           aria-label="System architecture. Each caller's browser sends microphone audio over WebRTC to a self-hosted LiveKit server. A translation worker receives each microphone track, cuts it into utterances and sends each one to the speech recognition service, sends each finished sentence to the translation service, sends the translation to the speech synthesis service, and publishes the resulting audio as a private track that only the listening caller may subscribe to. Captions go to both callers over LiveKit's data channel. An HTTPS proxy serves the call page and LiveKit signaling; the web app issues tokens and re-dispatches the translator if it disappears. The three model services share one NVIDIA L40S GPU.">
+        <defs>
+          <marker id="arr-audio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-audio"/></marker>
+          <marker id="arr-text" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-text"/></marker>
+          <marker id="arr-ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-ctl"/></marker>
+        </defs>
+
+        <!-- groups -->
+        <rect class="panel" x="12" y="160" width="196" height="340" rx="12"/>
+        <text class="t-group" x="110" y="182" text-anchor="middle">Callers' browsers</text>
+        <rect class="host" x="232" y="16" width="876" height="548" rx="14"/>
+        <text class="t-group" x="248" y="38">GPU host · 10.79.252.124 · Docker Compose</text>
+        <rect class="panel" x="256" y="50" width="504" height="500" rx="12"/>
+        <text class="t-group" x="272" y="538">Call stack · CPU only · host network</text>
+        <rect class="panel" x="806" y="150" width="288" height="400" rx="12"/>
+        <text class="t-group" x="822" y="172">NVIDIA NIM models · L40S, 46 GB</text>
+
+        <!-- callers -->
+        <rect class="node" x="28" y="196" width="164" height="88" rx="10"/>
+        <text class="t-title" x="110" y="226" text-anchor="middle">Caller A</text>
+        <text class="t-sub" x="110" y="246" text-anchor="middle">speaks Hindi</text>
+        <text class="t-script" x="110" y="268" text-anchor="middle">हिन्दी</text>
+        <rect class="node" x="28" y="396" width="164" height="88" rx="10"/>
+        <text class="t-title" x="110" y="426" text-anchor="middle">Caller B</text>
+        <text class="t-sub" x="110" y="446" text-anchor="middle">speaks Tamil</text>
+        <text class="t-script" x="110" y="468" text-anchor="middle">தமிழ்</text>
+
+        <!-- call stack -->
+        <rect class="node" x="284" y="66" width="184" height="58" rx="10"/>
+        <text class="t-title" x="376" y="91" text-anchor="middle">HTTPS proxy</text>
+        <text class="t-mono" x="376" y="110" text-anchor="middle">Caddy · :8443</text>
+
+        <rect class="node" x="556" y="66" width="184" height="58" rx="10"/>
+        <text class="t-title" x="648" y="91" text-anchor="middle">Web app</text>
+        <text class="t-sub" x="648" y="110" text-anchor="middle">page · tokens · watchdog</text>
+
+        <rect class="node" x="284" y="196" width="184" height="280" rx="10"/>
+        <text class="t-title" x="376" y="296" text-anchor="middle">LiveKit server</text>
+        <text class="t-sub" x="376" y="315" text-anchor="middle">WebRTC media (SFU)</text>
+        <text class="t-mono" x="376" y="334" text-anchor="middle">:7880 signaling</text>
+        <text class="t-mono" x="376" y="350" text-anchor="middle">UDP 50000-50200</text>
+        <text class="t-sub" x="376" y="398" text-anchor="middle">enforces who may</text>
+        <text class="t-sub" x="376" y="414" text-anchor="middle">hear which track</text>
+
+        <rect class="node" x="556" y="196" width="184" height="280" rx="10"/>
+        <text class="t-title" x="648" y="222" text-anchor="middle">Translation worker</text>
+        <text class="t-mono" x="648" y="240" text-anchor="middle">s2s-agent</text>
+        <text class="t-list-h" x="572" y="276">PER CALLER</text>
+        <text class="t-list" x="572" y="293">mic → echo cancel → VAD</text>
+        <text class="t-list-h" x="572" y="322">PER SENTENCE</text>
+        <text class="t-list" x="572" y="339">ASR → translate (via</text>
+        <text class="t-list" x="572" y="355">English if both Indian)</text>
+        <text class="t-list-h" x="572" y="384">PER LISTENER</text>
+        <text class="t-list" x="572" y="401">TTS → private track</text>
+        <text class="t-list-h" x="572" y="430">BOTH CALLERS</text>
+        <text class="t-list" x="572" y="447">captions + timings</text>
+
+        <!-- model services -->
+        <rect class="node" x="830" y="196" width="248" height="86" rx="10"/>
+        <text class="t-title" x="954" y="221" text-anchor="middle">Speech recognition</text>
+        <text class="t-mono" x="954" y="240" text-anchor="middle">:8001 · IndicConformer × 5</text>
+        <text class="t-sub" x="954" y="259" text-anchor="middle">NVIDIA Riva ASR NIM · 12 GB</text>
+
+        <rect class="node" x="830" y="296" width="248" height="86" rx="10"/>
+        <text class="t-title" x="954" y="321" text-anchor="middle">Translation</text>
+        <text class="t-mono" x="954" y="340" text-anchor="middle">:8002 · sarvam-translate</text>
+        <text class="t-sub" x="954" y="359" text-anchor="middle">Gemma 3 4B on LLM NIM · 11 GB</text>
+
+        <rect class="node" x="830" y="396" width="248" height="86" rx="10"/>
+        <text class="t-title" x="954" y="421" text-anchor="middle">Speech synthesis</text>
+        <text class="t-mono" x="954" y="440" text-anchor="middle">:8003 · indic-speak + Vocos</text>
+        <text class="t-sub" x="954" y="459" text-anchor="middle">speech LM on LLM NIM · 13 GB</text>
+
+        <text class="t-sub" x="950" y="522" text-anchor="middle">weights mounted read-only from ./models</text>
+
+        <!-- control plane -->
+        <path class="e-ctl" d="M110,160 V95 H282" marker-end="url(#arr-ctl)"/>
+        <text class="t-edge" x="172" y="88" text-anchor="middle">HTTPS :8443</text>
+        <text class="t-edge" x="172" y="114" text-anchor="middle">page · token · /rtc</text>
+        <line class="e-ctl" x1="468" y1="95" x2="554" y2="95" marker-end="url(#arr-ctl)"/>
+        <text class="t-edge" x="511" y="88" text-anchor="middle">/ and /api</text>
+        <line class="e-ctl" x1="376" y1="124" x2="376" y2="194" marker-end="url(#arr-ctl)"/>
+        <text class="t-edge" x="386" y="163">/rtc</text>
+        <line class="e-ctl" x1="600" y1="124" x2="471" y2="193" marker-end="url(#arr-ctl)"/>
+        <text class="t-edge" x="566" y="170">re-dispatch if lost</text>
+        <line class="e-ctl" x1="468" y1="378" x2="554" y2="378" marker-end="url(#arr-ctl)"/>
+        <text class="t-edge" x="511" y="371" text-anchor="middle">call jobs</text>
+
+        <!-- caller A <-> LiveKit -->
+        <line class="e-audio" x1="192" y1="214" x2="282" y2="214" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="238" y="207" text-anchor="middle">mic</text>
+        <line class="e-audio" x1="284" y1="240" x2="194" y2="240" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="238" y="233" text-anchor="middle">translation-A</text>
+        <line class="e-text" x1="284" y1="266" x2="194" y2="266" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="238" y="259" text-anchor="middle">captions</text>
+
+        <!-- caller B <-> LiveKit -->
+        <line class="e-audio" x1="192" y1="414" x2="282" y2="414" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="238" y="407" text-anchor="middle">mic</text>
+        <line class="e-audio" x1="284" y1="440" x2="194" y2="440" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="238" y="433" text-anchor="middle">translation-B</text>
+        <line class="e-text" x1="284" y1="466" x2="194" y2="466" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="238" y="459" text-anchor="middle">captions</text>
+
+        <!-- LiveKit <-> worker -->
+        <line class="e-audio" x1="468" y1="250" x2="554" y2="250" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="511" y="243" text-anchor="middle">both mics</text>
+        <line class="e-audio" x1="556" y1="290" x2="470" y2="290" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="512" y="283" text-anchor="middle">translations</text>
+        <line class="e-text" x1="556" y1="330" x2="470" y2="330" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="512" y="323" text-anchor="middle">captions</text>
+
+        <!-- worker <-> model services (localhost: Whisper NIM over HTTP, translation over the NIM's OpenAI API, TTS over a WebSocket) -->
+        <line class="e-audio" x1="740" y1="232" x2="828" y2="232" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="785" y="225" text-anchor="middle">utterances</text>
+        <line class="e-text" x1="830" y1="248" x2="742" y2="248" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="786" y="264" text-anchor="middle">transcripts</text>
+
+        <line class="e-text" x1="740" y1="332" x2="828" y2="332" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="785" y="325" text-anchor="middle">sentence</text>
+        <line class="e-text" x1="830" y1="348" x2="742" y2="348" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="786" y="364" text-anchor="middle">translation</text>
+
+        <line class="e-text" x1="740" y1="432" x2="828" y2="432" marker-end="url(#arr-text)"/>
+        <text class="t-edge text" x="785" y="425" text-anchor="middle">translation</text>
+        <line class="e-audio" x1="830" y1="448" x2="742" y2="448" marker-end="url(#arr-audio)"/>
+        <text class="t-edge audio" x="786" y="464" text-anchor="middle">48 kHz audio</text>
+      </svg>
+    </div>
+    <ul class="legend" aria-label="Legend">
+      <li><svg viewBox="0 0 34 10" aria-hidden="true"><line class="e-audio" x1="0" y1="5" x2="34" y2="5"/></svg>audio</li>
+      <li><svg viewBox="0 0 34 10" aria-hidden="true"><line class="e-text" x1="0" y1="5" x2="34" y2="5"/></svg>text and captions</li>
+      <li><svg viewBox="0 0 34 10" aria-hidden="true"><line class="e-ctl" x1="0" y1="5" x2="34" y2="5"/></svg>control: page, tokens, signaling, dispatch</li>
+    </ul>
+    <figcaption>Each caller's microphone reaches the translation worker through LiveKit. The worker turns
+      every finished sentence into the other caller's language and publishes it on a track that only that
+      caller may subscribe to, so A hears <code>translation-A</code> and B hears <code>translation-B</code>.
+      The worker cuts each microphone into utterances and sends each to the Riva ASR NIM over HTTP,
+      translates over the translation NIM's OpenAI chat API, and streams speech from the TTS service over a
+      WebSocket, all on localhost. Only the proxy and LiveKit's media ports face the network.</figcaption>
+  </figure>
+
+  <!-- ================================================================ timeline -->
+  <section>
+    <h2>One sentence, end to end</h2>
+    <figure>
+      <div class="frame timeline">
+        <svg viewBox="0 0 1000 196" role="img"
+             aria-label="Latency of one Hindi sentence, from the moment the speaker stops. Heard in Tamil, through English: pause detection 0.5 s, transcript at 0.52 s, translation done at 1.19 s, translated speech starts at 1.58 s, heard by the listener at 1.83 s. Heard in English, one translation call: transcript at 0.52 s, translation done at 0.78 s, speech starts at 1.15 s, heard at 1.33 s.">
+          <!-- scale: x = 160 + ms * 0.32 ; 2500 ms = 960 -->
+          <line class="axis" x1="160" y1="156" x2="960" y2="156"/>
+          <line class="axis" x1="160" y1="150" x2="160" y2="162"/>
+          <line class="axis" x1="320" y1="150" x2="320" y2="162"/>
+          <line class="axis" x1="480" y1="150" x2="480" y2="162"/>
+          <line class="axis" x1="640" y1="150" x2="640" y2="162"/>
+          <line class="axis" x1="800" y1="150" x2="800" y2="162"/>
+          <line class="axis" x1="960" y1="150" x2="960" y2="162"/>
+          <text class="t-tick" x="160" y="178" text-anchor="middle">0 s</text>
+          <text class="t-tick" x="320" y="178" text-anchor="middle">0.5 s</text>
+          <text class="t-tick" x="480" y="178" text-anchor="middle">1.0 s</text>
+          <text class="t-tick" x="640" y="178" text-anchor="middle">1.5 s</text>
+          <text class="t-tick" x="800" y="178" text-anchor="middle">2.0 s</text>
+          <text class="t-tick" x="960" y="178" text-anchor="middle">2.5 s</text>
+          <text class="t-row-sub" x="148" y="160" text-anchor="end">after speaker stops</text>
+
+          <!-- Hindi -> Tamil: 0-500 pause, 500-519 ASR, 519-1190 translate (two calls), 1190-1577 TTS, 1577-1827 network -->
+          <text class="t-row" x="148" y="46" text-anchor="end">Hindi → Tamil</text>
+          <text class="t-row-sub" x="148" y="62" text-anchor="end">via English</text>
+          <rect class="seg-wait" x="160" y="32" width="160" height="34"/>
+          <rect class="seg-model" x="320" y="32" width="6.1" height="34"/>
+          <rect class="seg-model" x="326.1" y="32" width="214.7" height="34"/>
+          <rect class="seg-model" x="540.8" y="32" width="123.8" height="34"/>
+          <rect class="seg-net" x="664.6" y="32" width="80" height="34"/>
+          <text class="t-seg" x="240" y="53" text-anchor="middle">pause detection</text>
+          <text class="t-seg" x="433.4" y="53" text-anchor="middle">translate via English</text>
+          <text class="t-seg" x="602.7" y="53" text-anchor="middle">speech synthesis</text>
+          <text class="t-seg" x="704.6" y="53" text-anchor="middle">network</text>
+          <text class="t-end" x="753" y="54">1.83 s</text>
+
+          <!-- Hindi -> English: 0-500, 500-522 ASR, 522-775 translate, 775-1153 TTS, 1153-1333 network -->
+          <text class="t-row" x="148" y="104" text-anchor="end">Hindi → English</text>
+          <text class="t-row-sub" x="148" y="120" text-anchor="end">one call</text>
+          <rect class="seg-wait" x="160" y="90" width="160" height="34"/>
+          <rect class="seg-model" x="320" y="90" width="7" height="34"/>
+          <rect class="seg-model" x="327" y="90" width="81" height="34"/>
+          <rect class="seg-model" x="408" y="90" width="121" height="34"/>
+          <rect class="seg-net" x="529" y="90" width="57.6" height="34"/>
+          <text class="t-seg" x="240" y="111" text-anchor="middle">pause detection</text>
+          <text class="t-seg" x="367.5" y="111" text-anchor="middle">translate</text>
+          <text class="t-seg" x="468.5" y="111" text-anchor="middle">speech synthesis</text>
+          <text class="t-seg" x="557.8" y="111" text-anchor="middle">network</text>
+          <text class="t-end" x="595" y="112">1.33 s</text>
+        </svg>
+      </div>
+      <figcaption>Measured in the two-caller test (a 6.5 s Hindi sentence). The half-second pause that tells
+        the system a sentence has ended is the largest fixed cost; speech recognition is the thin sliver after it
+        (about 20 ms). Between two Indian languages the translation goes through English, two model calls.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================ notes -->
+  <section>
+    <h2>Decisions that shape it</h2>
+    <ul class="notes">
+      <li><b>Private tracks, not mixing</b><span>The worker publishes one translated track per listener and
+        LiveKit's subscription permissions keep it theirs. Same-language pairs skip translation and hear
+        each other's own voice.</span></li>
+      <li><b>The model sets the route</b><span>sarvam-translate translates English to and from the Indian
+        languages. Between two Indian languages the worker goes through English, as the model card says.</span></li>
+      <li><b>NVIDIA NIM wherever NVIDIA supports it</b><span>AI4Bharat's IndicConformer models, converted with
+        NVIDIA's nemo2riva and riva-build, run in the Riva ASR NIM; sarvam-translate and indic-speak's speech LM run
+        on the model-free LLM NIM. Only the VAD that cuts calls into utterances and indic-speak's audio decoder are
+        our own code.</span></li>
+      <li><b>Self-healing calls</b><span>If the worker restarts or crashes, the web app's watchdog sends
+        a new translator into any room that lost one, within about 10 to 15 seconds.</span></li>
+      <li><b>No feedback loops</b><span>The worker cancels everything it plays out of every microphone and
+        drops utterances whose loudness tracks the playout, so translated speech from a nearby speaker is
+        never translated again.</span></li>
+      <li><b>Models stay private</b><span>The model services listen on localhost only. The network
+        sees the HTTPS proxy on 8443, LiveKit's TCP 7881 and UDP 50000 to 50200.</span></li>
+      <li><b>Speech synthesis sets capacity</b><span>About 6 to 7 simultaneous real-time voices per GPU.
+        Speech recognition handles about 44 utterances a second.</span></li>
+      <li><b>Streaming everywhere it helps</b><span>Captions appear while people talk (the utterance so far is
+        re-transcribed every half second), translations stream word by word, and speech starts about 0.4 s after
+        the text is ready.</span></li>
+    </ul>
+  </section>
+
+  <footer>Source: <code>/home/ubuntu/indicspeechModels</code>. Details in <code>README.md</code> and
+    <code>docs/MODEL_SERVICES.md</code>.</footer>
+</main>

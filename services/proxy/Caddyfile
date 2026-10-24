@@ -1,0 +1,14 @@
+# HTTPS front door for the demo: browsers only allow microphone access on HTTPS.
+# `tls internal` = Caddy's own CA (browsers warn once; trust root.crt to silence it).
+{
+	auto_https disable_redirects
+	skip_install_trust
+	default_sni {$PUBLIC_HOST}
+}
+
+https://{$PUBLIC_HOST}:8443, https://localhost:8443 {
+	tls internal
+	@livekit path /rtc /rtc/* /twirp/*
+	reverse_proxy @livekit 127.0.0.1:7880
+	reverse_proxy 127.0.0.1:8090
+}

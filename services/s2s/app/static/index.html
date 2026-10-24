@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Indic Call Translator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- one family per script; unicode-range means only the scripts on screen are downloaded -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&family=Noto+Sans+Bengali:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&family=Noto+Sans+Telugu:wght@400;600&family=Noto+Sans+Kannada:wght@400;600&family=Noto+Sans+Malayalam:wght@400;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Gurmukhi:wght@400;600&family=Noto+Sans+Oriya:wght@400;600&family=Noto+Naskh+Arabic:wght@400;600&family=Noto+Sans+Ol+Chiki&family=Noto+Sans+Meetei+Mayek&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.js"></script>
+</head>
+<body>
+
+<!-- ============================================================ join -->
+<main id="join" class="join">
+  <section class="join-intro">
+    <p class="eyebrow">Indic Call Translator</p>
+    <h1>Talk in your language.<br>Hear theirs in yours.</h1>
+    <p class="lede">A two-person voice call where each side speaks their own Indian language and
+      hears the other person translated, with live captions.</p>
+    <ul class="tips">
+      <li>Share the room link with the other person after you join.</li>
+      <li>Pause briefly after each sentence; the translation starts about 1.5 s later.</li>
+      <li>In the same room as the other person? Use headphones, or each mic picks up the other side.</li>
+    </ul>
+  </section>
+
+  <form id="join-form" class="card join-card" autocomplete="on">
+    <h2>Join a call</h2>
+    <div class="field">
+      <label for="name">Your name</label>
+      <input id="name" required maxlength="40" autocomplete="name" placeholder="e.g. Asha">
+    </div>
+    <div class="field">
+      <label for="room">Room</label>
+      <div class="input-row">
+        <input id="room" required maxlength="60" spellcheck="false">
+        <button type="button" id="new-room" class="btn ghost small" title="Make a new room name">New</button>
+      </div>
+    </div>
+    <div class="field-grid">
+      <div class="field">
+        <label for="speak">My language</label>
+        <select id="speak"></select>
+      </div>
+      <div class="field">
+        <label for="hear">Hear the other person in</label>
+        <select id="hear"></select>
+      </div>
+    </div>
+    <fieldset class="field segmented" aria-describedby="voice-hint">
+      <legend>My voice, as the other person hears it</legend>
+      <label><input type="radio" name="voice" value="female" checked><span>Female</span></label>
+      <label><input type="radio" name="voice" value="male"><span>Male</span></label>
+    </fieldset>
+    <p id="voice-hint" class="hint">Your words are spoken to them by a studio voice in their language.</p>
+
+    <div class="field mic-check">
+      <label for="mic-device">Microphone</label>
+      <div class="input-row">
+        <select id="mic-device" disabled><option>Check your microphone first</option></select>
+        <button type="button" id="mic-test" class="btn ghost small">Check mic</button>
+      </div>
+      <div class="meter" aria-hidden="true"><span id="mic-test-level"></span></div>
+    </div>
+
+    <button type="submit" id="join-btn" class="btn primary wide">Join call</button>
+    <p id="join-error" class="error" role="alert" hidden></p>
+  </form>
+</main>
+
+<!-- ============================================================ call -->
+<main id="call" class="call" hidden>
+  <header class="topbar">
+    <div class="room-info">
+      <span class="dot" id="conn-dot" aria-hidden="true"></span>
+      <span class="room-label">Room <strong id="room-name"></strong></span>
+      <span id="translator" class="chip">translator joining…</span>
+    </div>
+    <div class="top-actions">
+      <span id="latency" class="latency" title="Median time from the other person stopping to their translated voice starting"></span>
+      <button id="copy-link" class="btn ghost small" type="button" aria-label="Copy invite link">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+        <span>Invite</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="people" id="people" aria-label="People in the call"></section>
+
+  <section class="feed" id="feed" aria-live="polite" aria-relevant="additions" aria-label="Conversation">
+    <div class="empty" id="empty">
+      <p class="empty-title">Say something</p>
+      <p>Your words and their translation appear here. The other person hears you in their language.</p>
+    </div>
+  </section>
+
+  <nav class="controls" aria-label="Call controls">
+    <button id="mute" class="ctrl" type="button" aria-pressed="false">
+      <span class="ctrl-icon level-ring" id="mic-ring">
+        <svg class="i-on" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <svg class="i-off" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.8 5.1M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>
+      </span>
+      <span class="ctrl-label" id="mute-label">Mute</span>
+    </button>
+    <button class="ctrl" type="button" commandfor="settings" command="show-modal">
+      <span class="ctrl-icon">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </span>
+      <span class="ctrl-label">Settings</span>
+    </button>
+    <button id="leave" class="ctrl danger" type="button">
+      <span class="ctrl-icon">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4 12.3-4 17 0l-1.6 2.6-3.4-1.2v-2.4c-2.4-.8-4.6-.8-7 0v2.4l-3.4 1.2z"/></svg>
+      </span>
+      <span class="ctrl-label">Leave</span>
+    </button>
+  </nav>
+</main>
+
+<!-- ============================================================ settings -->
+<dialog id="settings" class="sheet" aria-labelledby="settings-title">
+  <form method="dialog" class="sheet-body">
+    <header class="sheet-head">
+      <h2 id="settings-title">Call settings</h2>
+      <button class="icon-btn" type="button" commandfor="settings" command="close" aria-label="Close settings">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+
+    <h3>Languages</h3>
+    <div class="field-grid">
+      <div class="field"><label for="speak-live">My language</label><select id="speak-live"></select></div>
+      <div class="field"><label for="hear-live">Hear the other person in</label><select id="hear-live"></select></div>
+    </div>
+    <fieldset class="field segmented">
+      <legend>My voice, as the other person hears it</legend>
+      <label><input type="radio" name="voice-live" value="female"><span>Female</span></label>
+      <label><input type="radio" name="voice-live" value="male"><span>Male</span></label>
+    </fieldset>
+    <p class="hint">Changes apply from your next sentence.</p>
+
+    <h3>Audio</h3>
+    <div class="field"><label for="mic-live">Microphone</label><select id="mic-live"></select></div>
+    <div class="field" id="speaker-field"><label for="speaker-live">Speaker</label><select id="speaker-live"></select></div>
+    <div class="field">
+      <label for="vol-translation">Translated voice <output id="vol-translation-out">100%</output></label>
+      <input id="vol-translation" type="range" min="0" max="100" value="100">
+    </div>
+    <div class="field">
+      <label for="vol-original">Their original voice <output id="vol-original-out">0%</output></label>
+      <input id="vol-original" type="range" min="0" max="100" value="0">
+      <p class="hint" id="original-hint">Mix in the other person's own voice under the translation.</p>
+    </div>
+
+    <h3>Captions</h3>
+    <label class="switch">
+      <input type="checkbox" id="show-english">
+      <span>Show the English step when translation goes through English</span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="show-original" checked>
+      <span>Show what the other person said in their language</span>
+    </label>
+  </form>
+</dialog>
+
+<!-- toasts: one manual popover in the top layer holding the stack -->
+<div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
