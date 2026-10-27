@@ -1,5 +1,7 @@
 # Indic speech model services (ASR, translation, TTS) and the translated-call stack on
 # top of them (LiveKit, agent worker, demo web app, HTTPS proxy).
+# For now .env adds docker-compose.shared.yml (COMPOSE_FILE): only the call stack runs, on
+# meetmind's model servers (Parakeet, Riva Translate 1.6B, Magpie) and LiveKit.
 #
 #   docker login nvcr.io -u '$oauthtoken'   # once; password: the NGC key (NVIDIA_API_KEY in .env)
 #   docker compose up -d --build            # first start compiles graphs

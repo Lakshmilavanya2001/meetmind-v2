@@ -1,19 +1,46 @@
-# Indic speech model services
+# Indic speech call translator
 
-A real-time Indic speech-to-speech call translator. Speech recognition, translation
-and speech synthesis models run on one GPU, chained by a call orchestrator built on
-self-hosted LiveKit: everyone on a call speaks their own language and hears the others
-in the language they choose (tested with two and three people). See
-[Translated calls](#translated-calls-livekit) for the call stack.
+A real-time speech-to-speech call translator: everyone on a call speaks their own language
+and hears the others in the language they choose (tested with two and three people). A call
+orchestrator built on LiveKit chains speech recognition, translation and speech synthesis.
+See [Translated calls](#translated-calls-livekit) for the call stack.
+
+## Models in use
+
+**Since 2026-10-27, for now, calls run on meetmind's model servers.** `.env` sets
+`COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml`, so this repo runs only the call
+stack (agent, page, HTTPS proxy). It uses the models that meetmind, the meeting app on this
+host, deploys and uses itself:
+
+| Step | Model | Where it runs | API |
+|---|---|---|---|
+| Speech recognition | NVIDIA Parakeet 1.1B RNNT multilingual, offline mode | Riva runtime on this host's GPU (meetmind's `deploy/gpu-host`, service `asr`), `127.0.0.1:8001` | `POST /v1/audio/transcriptions`, one request per utterance (the same API as the IndicConformer NIM) |
+| Translation | NVIDIA Riva Translate 1.6B (`megatronnmt_any_any_1b`: 36 languages, any direction) | Riva runtime on this host's GPU (service `nmt`), `127.0.0.1:8002` | `POST /v1/text/translations`, the Riva Translate NIM's API |
+| Speech | NVIDIA Magpie TTS Multilingual | Magpie TTS NIM on another GPU host (`MAGPIE_TTS_URL` in `.env`) | `POST /v1/audio/synthesize_online`, raw PCM streamed |
+| WebRTC | LiveKit | meetmind's LiveKit server, `127.0.0.1:7880` | LiveKit |
+
+Callers speak and hear **English or Hindi**, the languages all three models cover. From the
+moment a speaker stops, the translation starts playing after ~0.9 s and the other caller
+hears it after ~1.1 s (see [Translated calls](#translated-calls-livekit)). The two model
+servers on this GPU take ~22 GB (Parakeet ~12 GB, Riva Translate ~9.6 GB); the call stack
+itself needs no GPU.
+
+## This repo's own model stack (off for now)
+
+Remove `COMPOSE_FILE` from `.env` to run the calls on the models in this repo instead:
+5 languages to speak, the 22 scheduled Indian languages plus English to hear. Their images
+were removed on 2026-10-27 to free disk, so the next start pulls and builds them again
+(~56 GB). They use the same ports (8001, 50051, 8002) and LiveKit ports as meetmind's
+servers, so the two can't run side by side.
 
 The models run in **NVIDIA NIM containers** wherever NVIDIA supports them. The one
 piece no NIM covers, turning indic-speak's audio tokens into sound, is our own
 container.
 
-**Architecture diagram:** [docs/architecture.html](docs/architecture.html) (open it in a
-browser; also published at https://claude.ai/artifact/PUtZvT23wvBJFamux4WsYE). It shows
-every component and what flows between them, and a to-scale timeline of one sentence from
-the speaker stopping to the listener hearing the translation.
+**Architecture diagram** of this stack: [docs/architecture.html](docs/architecture.html)
+(open it in a browser; also published at https://claude.ai/artifact/PUtZvT23wvBJFamux4WsYE).
+It shows every component and what flows between them, and a to-scale timeline of one
+sentence from the speaker stopping to the listener hearing the translation.
 
 | Service | Model | Port | Runtime | API |
 |---|---|---|---|---|
@@ -35,11 +62,13 @@ Large v3 NIM, which wrote Malayalam in Gurmukhi script (~92% character errors), 
 IndicConformer came back, this time inside NVIDIA's Riva NIM. Translation used
 sarvamai/sarvam-translate until 2026-10-26. In a real Malayalam ↔ Kannada call it invented
 meanings and sometimes commented on the text instead of translating it, so indic-translate
-came back, now on the NIM with the same deployment and parallel translation.
+came back, now on the NIM with the same deployment and parallel translation. On 2026-10-27
+the calls moved to meetmind's models (above), English and Hindi only, for now.
 
 ```
 indicspeechModels/
 ├── docker-compose.yml        # model services + call stack, started in order
+├── docker-compose.shared.yml # for now: only the call stack, on meetmind's model servers
 ├── models/                   # weights (mounted read-only at /models): indic-translate, indic-speak, snac_24khz, indicconformer-<lang>
 ├── nim-cache/                # the LLM NIMs' caches (compile caches, runtime manifests)
 ├── nim-export/asr-indic/     # the ASR NIM's model repository (custom_model.tar.gz, built)
@@ -56,7 +85,32 @@ indicspeechModels/
 
 ## Quick start
 
-The NIM images come from NVIDIA's registry. Log in once, with the NGC API key
+### On meetmind's model servers (current)
+
+This needs, on this host:
+
+- **meetmind's model servers running:** in `meetmind/deploy/gpu-host`, run `docker compose --env-file .env up -d`, which starts `asr` and `nmt`.
+- **meetmind's LiveKit accepting this repo's key:** add `LIVEKIT_API_KEY: LIVEKIT_API_SECRET` under `keys:` in meetmind's `infra/livekit.yaml`, then restart `meetmind-livekit`.
+- **These settings in `.env`:**
+  - `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `PUBLIC_HOST`;
+  - `MAGPIE_TTS_URL`, the Magpie NIM (`http://host:9000/v1`);
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml`.
+
+```bash
+docker compose up -d --build
+```
+
+This starts `s2s-agent`, `s2s-web` and `proxy`; the call page is `https://$PUBLIC_HOST:8443`.
+An English ↔ Hindi call test:
+
+```bash
+docker run --rm --network host -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test_en_hi.py
+```
+
+### With this repo's own models
+
+Remove `COMPOSE_FILE` from `.env`, and stop meetmind's model servers and LiveKit first (same
+ports). The NIM images come from NVIDIA's registry. Log in once, with the NGC API key
 (`NVIDIA_API_KEY` in `.env`) as the password:
 
 ```bash
@@ -119,11 +173,17 @@ Language codes: ASR takes Riva codes (`ml-IN`, `hi-IN`, …), TTS short ISO code
 
 ---
 
+## Own model stack: APIs and measurements
+
+These sections describe this repo's own models (off for now, see above). With the shared
+setup, ports 8001 and 8002 are meetmind's Parakeet and Riva Translate servers, whose APIs are
+in the [Models in use](#models-in-use) table.
+
 > **Using the models directly:** [docs/MODEL_SERVICES.md](docs/MODEL_SERVICES.md) is the
-> complete guide to the model APIs (every parameter, error and tip), with tested
+> complete guide to the own stack's model APIs (every parameter, error and tip), with tested
 > examples in [docs/examples/](docs/examples/). The sections below are a summary.
 
-## ASR — `http://host:8001/v1/audio/transcriptions`
+### ASR — `http://host:8001/v1/audio/transcriptions`
 
 AI4Bharat IndicConformer models served by NVIDIA's Riva ASR NIM, one model per language,
 deployed the way NVIDIA documents custom models (see
@@ -150,7 +210,7 @@ curl -s localhost:8001/v1/audio/transcriptions -F language=hi-IN -F file=@testda
 - Also: gRPC on `50051` (the Riva ASR API, e.g. `nvidia-riva-client`; not tested here),
   `GET /v1/health/ready`.
 
-## Translate — `http://host:8002/v1/chat/completions`
+### Translate — `http://host:8002/v1/chat/completions`
 
 bodhan-ai/indic-translate on NVIDIA's model-free LLM NIM, an OpenAI-compatible server, so
 any OpenAI client works. The caller builds the prompt, following the model's prompt
@@ -177,7 +237,7 @@ contract (`models/indic-translate/scripts/prompt_contract.py`):
 
 Also: `GET /v1/models`, `GET /v1/health/ready`, `GET /v1/metrics` (Prometheus).
 
-## TTS — `ws://host:8003/v1/stream`
+### TTS — `ws://host:8003/v1/stream`
 
 | client → server | |
 |---|---|
@@ -212,7 +272,7 @@ Vocos), on the GPU, in streamed windows.
 
 ---
 
-## Measured performance
+### Measured performance
 
 These are measurements on one L40S running all the services at once. Clients ran
 on the same host and were driven in real time.
@@ -292,45 +352,39 @@ Re-run the benchmarks:
 
 ## Translated calls (LiveKit)
 
-> **Running on meetmind's model servers, for now (2026-10-27).** `.env` sets
-> `COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml`, so `docker compose up -d` starts
-> only `s2s-agent`, `s2s-web` and `proxy`. They use the models meetmind deploys on this host:
-> - recognition: Parakeet 1.1B RNNT multilingual on a Riva ASR NIM, `127.0.0.1:8001`, the same HTTP API as the IndicConformer NIM;
-> - translation: Riva Translate 1.6B, `127.0.0.1:8002` (`TRANSLATE_API=riva`);
-> - speech: Magpie TTS on the GPU host (`TTS_API=magpie`);
-> - LiveKit: meetmind's server, `127.0.0.1:7880`, which has this repo's `LIVEKIT_API_KEY` added to its keys.
->
-> Callers speak and hear English or Hindi, the languages all three models share. The agent joins only rooms that ask for
-> it by name (`S2S_AGENT_NAME`, default `indic-s2s`, in each caller's token), never meetmind's
-> calls. Measured on an English ↔ Hindi call (`clients/call_test_en_hi.py`), from the speaker stopping:
->
-> | Stage | Time |
-> |---|---|
-> | Final transcript (the 500 ms VAD pause plus ~50 ms ASR) | ~0.55 s |
-> | Translated | ~0.83 s |
-> | Speech starts playing | ~0.89 s |
->
-> To use this repo's own models again, remove `COMPOSE_FILE` from `.env`. The full stack's images were removed to free
-> disk; `up -d --build` pulls and builds them again (~56 GB).
-
 ```
 browser A ──mic──┐                                   ┌──► "translation-A" ──► browser A
                  ▼                                   │     (only A may subscribe)
           LiveKit server (self-hosted SFU) ◄────► s2s-agent ──► ASR → translate → TTS
-                 ▲                                   │     (model services above)
+                 ▲                                   │     (the models in use, above)
 browser B ──mic──┘                                   └──► "translation-B" ──► browser B
 ```
 
 | Service | What it is | Listens on |
 |---|---|---|
-| `livekit` | `livekit/livekit-server:v1.13.9`, WebRTC media server | signaling `127.0.0.1:7880`; media UDP `50000-50200`, TCP `7881` on `PUBLIC_HOST` |
-| `s2s-agent` | LiveKit agent worker (`services/s2s/app/agent.py`); joins every room | outbound only |
+| LiveKit | now meetmind's server (WebRTC media server), shared; this repo's own `livekit` service (`livekit/livekit-server:v1.13.9`) runs only with its own model stack | signaling `127.0.0.1:7880`; media UDP `50000-50200`, TCP `7881` on `PUBLIC_HOST` |
+| `s2s-agent` | LiveKit agent worker (`services/s2s/app/agent.py`); joins the rooms that ask for it | outbound only |
 | `s2s-web` | token API + demo page (`services/s2s/app/web.py`, `static/`) | `127.0.0.1:8090` |
 | `proxy` | Caddy, HTTPS with its own CA, in front of the page and `/rtc` | `8443` |
 
-These four services run with host networking (WebRTC needs real addresses) and
+These services run with host networking (WebRTC needs real addresses) and
 need no GPU. `.env` holds `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and
 `PUBLIC_HOST` (the address browsers use, now `10.79.252.124`).
+
+**Which models the agent uses** is set in its environment (`docker-compose.shared.yml` sets
+the current ones):
+
+| Setting | Current (shared) | Own model stack |
+|---|---|---|
+| `ASR_URL` | Parakeet, `http://127.0.0.1:8001` | IndicConformer NIM, same address and API |
+| `TRANSLATE_API`, `TRANSLATE_URL` | `riva`, `http://127.0.0.1:8002` | `openai`, `http://127.0.0.1:8002/v1` (indic-translate) |
+| `TTS_API` | `magpie` (`MAGPIE_TTS_URL`; voices `MAGPIE_FEMALE_VOICE` Louise, `MAGPIE_MALE_VOICE` Leo) | `indic-speak` (`TTS_URL`) |
+| `S2S_SPEAK_LANGUAGES`, `S2S_HEAR_LANGUAGES` | `en,hi` | unset: every language the models cover |
+
+**Sharing a LiveKit server.** The agent registers as `indic-s2s` (`S2S_AGENT_NAME`) and joins
+only rooms that ask for it by that name: the web app puts the request in every caller's
+token. Its watchdog re-dispatches only those rooms. On meetmind's LiveKit server, meetmind's
+calls are left alone, and meetmind ignores this app's rooms.
 
 **Try it:** open `https://10.79.252.124:8443` on two devices, or two browsers
 with different mics. Pick a name, your language and the language to hear the
@@ -350,14 +404,18 @@ On a machine that can't reach `10.79.252.124` directly, testing needs that
 address routable. Reaching the call from the internet needs a TURN server and a
 real certificate; neither is set up yet.
 
-**Language choice.** Each caller has three participant attributes: `speak` (the
-languages with an ASR model: Malayalam, Hindi, Kannada, Telugu, Tamil), `hear` (the 22
-Indian languages plus English) and `voice` (female | male, the voice the *other* person hears them
-in). They're set at join time and can be changed mid-call from the page. The agent
+**Language choice.** Each caller has three participant attributes: `speak` (now English or
+Hindi; with the own models, the languages with an ASR model: Malayalam, Hindi, Kannada,
+Telugu, Tamil), `hear` (now English or Hindi; with the own models, the 22 Indian languages
+plus English) and `voice` (female | male, the voice the *other* person hears them in). They're set at join time and can be changed mid-call from the page. The agent
 restarts that caller's speech recognition or retargets translation on the fly. If a
 listener's `hear` equals the speaker's `speak`, nothing is translated and the page
 plays the speaker's own voice. Otherwise the page plays only the translation; an
 "original voice" slider can mix the speaker's own voice back in.
+
+The next two paragraphs are about indic-translate (own model stack). Riva Translate
+translates every pair in one call, takes the text as it is, and returns the whole translation
+at once (`RivaTranslateClient` in `agent.py`).
 
 **Translation route.** `S2S_PIVOT_THROUGH_ENGLISH` in the agent's environment picks the
 route between two Indian languages:
@@ -394,11 +452,11 @@ leaks into it, see below), runs Silero VAD on it (`services/s2s/app/vad.py`, CPU
 sends each finished utterance to the ASR NIM (`services/s2s/app/asr.py`). On each final
 transcript, it translates into every listener language at the same time (streaming the
 text as captions), and each language goes to TTS as soon as it is ready: **once per
-language**, with the audio copied to every listener of that language (`Synthesizer` in
-`agent.py`). Each listener has their own track, which only they may subscribe to
+language**, with the audio copied to every listener of that language (`Synthesizer`, or
+`MagpieSynthesizer` for Magpie, in `agent.py`). Each listener has their own track, which only they may subscribe to
 (publisher-side permissions), and their own playback queue that plays utterances in
 order. So one person speaking means one voice per distinct listener language, at most
-N−1 in a call of N people. TTS (6–7 real-time voices) keeps calls with up to about 5–7
+N−1 in a call of N people. With the own models, TTS (6–7 real-time voices) keeps calls with up to about 5–7
 listener languages smooth, and people sharing a language cost nothing extra. A call never
 runs more syntheses at once than it has listeners.
 Transcripts, translations and per-utterance latency go to every caller on the
@@ -406,10 +464,24 @@ Transcripts, translations and per-utterance latency go to every caller on the
 messages, see `agent.py`.
 
 Live captions of the speaker's own words while they talk (`S2S_ASR_PARTIALS=1`, on):
-the utterance so far is re-transcribed every half second, ~25 ms per request.
+the utterance so far is re-transcribed every half second (~50 ms per request on Parakeet,
+~25 ms on IndicConformer).
 
-**Measured** with two simulated callers in real time (`clients/call_test.py`). Times are
-from the moment the speaker stops talking:
+**Measured now** (shared models) with two simulated callers in real time
+(`clients/call_test_en_hi.py`, three runs on 2026-10-27). Times are from the moment the
+speaker stops talking:
+
+| | Hindi → English (6.5 s clip) | English → Hindi (~5 s) |
+|---|---|---|
+| final transcript | 0.56–0.61 s (the 0.5 s VAD pause; ASR adds ~50 ms) | 0.54–0.56 s |
+| translation complete | 0.83–0.88 s | 0.83–0.93 s |
+| translated speech starts (agent) | 0.87–0.92 s | 0.89–0.99 s |
+| translated speech heard (other caller, after WebRTC) | 1.12–1.14 s | 1.04 s |
+
+Most of what is left is the 0.5 s pause that ends an utterance (`S2S_VAD_MIN_SILENCE_MS`)
+and translation (~0.3 s); Magpie's first audio takes ~50 ms.
+
+**With the own model stack** (`clients/call_test.py`, 2026-10-26):
 
 | | Hindi → Tamil (6.5 s, direct) | Tamil → Hindi (direct) | Hindi → English |
 |---|---|---|---|
@@ -498,7 +570,9 @@ listener starts talking.
 
 ## Implementation notes
 
-These are the non-obvious decisions. Each one was measured, not assumed.
+These are the non-obvious decisions. Each one was measured, not assumed. Most are about the
+own model stack. The shared setup's model servers are documented in meetmind's
+`docs/DEPLOYMENT.md`.
 
 **NVIDIA deployment.** Every model runs in an NVIDIA NIM container, configured the way
 NVIDIA documents it: custom ASR models through `nemo2riva` → `riva-build` →
@@ -576,6 +650,20 @@ which is why the healthcheck sends one before reporting healthy.
 
 ## Operations
 
+**Now (shared models):**
+
+- This repo runs `s2s-agent`, `s2s-web` and `proxy`, which need no GPU. Logs: `docker compose logs -f s2s-agent`.
+- The model servers belong to meetmind: `meetmind/deploy/gpu-host` (`asr` Parakeet, `nmt`
+  Riva Translate, ~22 GB of GPU memory) and the Magpie NIM. If one is down, calls get no
+  captions, translation or speech for that step.
+- Restarting meetmind's LiveKit (`meetmind-livekit`) drops calls in both apps. Removing
+  this repo's key from its `infra/livekit.yaml` stops this app's calls.
+- **Disk:** the own stack's images were removed on 2026-10-27; Docker keeps both the
+  compressed and the unpacked copy of each image, so an image takes ~3× its download size.
+  `docker builder prune` reclaims build cache after rebuilds.
+
+**Own model stack:**
+
 - **GPU budget** (46 GB L40S): translate 16.9 GB (indic-translate, 3 GiB KV cache), ASR
   NIM 10–12 GB (five fp32 engines), tts-lm 12.4 GB, tts decoder 0.9 GB: 40.3 GB in all,
   ~5.7 GB free. The `dsx-explorer` compose project
@@ -594,14 +682,14 @@ which is why the healthcheck sends one before reporting healthy.
   `ASR_WARM_LANGUAGES` in `services/asr-nim/healthcheck.py`, then restart `asr` and
   rebuild `s2s-agent`.
 - **Logs:** `docker compose logs -f asr` (or `translate`, `tts-lm`, `tts`, `s2s-agent`).
-- **Disk:** the root volume is at 90% (32 GB free). Docker keeps both the compressed and
-  the unpacked copy of each image, so an image takes ~3× its download size.
-  `docker builder prune` reclaims build cache after rebuilds.
 - **Model files** in `models/` (including `indicconformer-<lang>/`) were downloaded with
   the HF token in `.env`; the token is not passed to the serving containers.
 
 ## Licensing
 
+- **Parakeet, Riva Translate 1.6B and Magpie TTS** (in use now) are NVIDIA models, served
+  from NVIDIA's Riva and NIM containers on meetmind's servers. NVIDIA's terms for those
+  containers apply, as below.
 - **NIM containers** (the Riva ASR NIM image, the model-free NIM) are NVIDIA software:
   pulling needs an NGC key, and production use needs an NVIDIA AI Enterprise licence. The
   ASR image is governed by the NVIDIA AI Product Agreement (shown in its startup log).
