@@ -1,0 +1,36 @@
+# The call translator on meetmind's model servers, for now, instead of this repo's own
+# (meetmind/deploy/gpu-host on this host, and the Magpie endpoint meetmind uses):
+#   speech recognition  Parakeet 1.1B RNNT multilingual, Riva ASR NIM, offline   127.0.0.1:8001
+#   translation         Riva Translate 1.6B, with the Riva Translate NIM's API    127.0.0.1:8002
+#   speech              NVIDIA Magpie TTS Multilingual (NIM)                      MAGPIE_TTS_URL
+#   LiveKit             meetmind's server (127.0.0.1:7880); it must accept LIVEKIT_API_KEY
+# Callers speak and hear English or Hindi (what all three cover). Only the agent, the call page
+# and the HTTPS proxy run here; this repo's model services and LiveKit stay off. The agent joins
+# only this app's rooms (S2S_AGENT_NAME), never meetmind's.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d --build
+# COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml in .env makes this the default;
+# remove it to run the whole stack on its own models again.
+
+services:
+  asr: {profiles: [own-models]}
+  translate: {profiles: [own-models]}
+  tts-lm: {profiles: [own-models]}
+  tts: {profiles: [own-models]}
+  livekit: {profiles: [own-livekit]}
+
+  s2s-agent:
+    depends_on: !reset {}
+    environment:
+      ASR_URL: http://127.0.0.1:8001            # Parakeet (Riva HTTP API, as IndicConformer's)
+      TRANSLATE_API: riva
+      TRANSLATE_URL: http://127.0.0.1:8002      # Riva Translate 1.6B
+      TTS_API: magpie
+      MAGPIE_TTS_URL: ${MAGPIE_TTS_URL:?set MAGPIE_TTS_URL in .env (the Magpie TTS NIM, http://host:9000/v1)}
+      S2S_SPEAK_LANGUAGES: en,hi
+      S2S_HEAR_LANGUAGES: en,hi
+
+  s2s-web:
+    environment:
+      S2S_SPEAK_LANGUAGES: en,hi
+      S2S_HEAR_LANGUAGES: en,hi

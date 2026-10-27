@@ -53,6 +53,7 @@ LM_URL = os.environ.get("TTS_LM_URL", "http://tts-lm:8000/v1")          # OpenAI
 LM_MODEL = os.environ.get("TTS_LM_MODEL", "indic-speak")
 MAX_MODEL_LEN = int(os.environ.get("MAX_MODEL_LEN", "4096"))           # must match the NIM's --max-model-len
 TOKENS_PER_SECOND = 82                  # model card: 82 tokens ~ 1 s of audio
+MIN_CHARS_PER_S = float(os.environ.get("TTS_MIN_CHARS_PER_S", "9"))   # length cap, see synthesize()
 MAX_CHUNK_CHARS = int(os.environ.get("TTS_MAX_CHUNK_CHARS", "300"))
 DEFAULTS = dict(
     temperature=float(os.environ.get("TTS_TEMPERATURE", "0.6")),
@@ -218,8 +219,9 @@ async def synthesize(req: SynthRequest, rid: str, stats: Stats | None = None) ->
 
     for ci, chunk in enumerate(split_text(req.text)):
         prompt = build_prompt(chunk, speaker, req.style)
-        # generous length cap (~2.5x the library's 12 chars/s) so babble can't run for 30 s
-        est_s = req.max_seconds or min(30.0, 2.5 * len(chunk) / 12 + 2)
+        # length cap: the speech LM sometimes doesn't stop and babbles on. No normal clip we
+        # measured (6 languages, 144 clips) spoke slower than 9 chars/s plus 1.2 s of pauses
+        est_s = req.max_seconds or min(30.0, len(chunk) / MIN_CHARS_PER_S + 1.2)
         max_tokens = min(int(est_s * TOKENS_PER_SECOND), state["max_model_len"] - len(prompt))
         params = dict(
             temperature=req.temperature if req.temperature is not None else DEFAULTS["temperature"],

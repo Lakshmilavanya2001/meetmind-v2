@@ -164,10 +164,10 @@ svg { font-family: var(--sans); }
         <text class="t-list-h" x="572" y="276">PER CALLER</text>
         <text class="t-list" x="572" y="293">mic → echo cancel → VAD</text>
         <text class="t-list-h" x="572" y="322">PER SENTENCE</text>
-        <text class="t-list" x="572" y="339">ASR → translate (via</text>
-        <text class="t-list" x="572" y="355">English if both Indian)</text>
+        <text class="t-list" x="572" y="339">ASR → translate (all</text>
+        <text class="t-list" x="572" y="355">languages in parallel)</text>
         <text class="t-list-h" x="572" y="384">PER LISTENER</text>
-        <text class="t-list" x="572" y="401">TTS → private track</text>
+        <text class="t-list" x="572" y="401">TTS once per language</text>
         <text class="t-list-h" x="572" y="430">BOTH CALLERS</text>
         <text class="t-list" x="572" y="447">captions + timings</text>
 
@@ -179,8 +179,8 @@ svg { font-family: var(--sans); }
 
         <rect class="node" x="830" y="296" width="248" height="86" rx="10"/>
         <text class="t-title" x="954" y="321" text-anchor="middle">Translation</text>
-        <text class="t-mono" x="954" y="340" text-anchor="middle">:8002 · sarvam-translate</text>
-        <text class="t-sub" x="954" y="359" text-anchor="middle">Gemma 3 4B on LLM NIM · 11 GB</text>
+        <text class="t-mono" x="954" y="340" text-anchor="middle">:8002 · indic-translate</text>
+        <text class="t-sub" x="954" y="359" text-anchor="middle">Gemma-4-E4B on LLM NIM · 17 GB</text>
 
         <rect class="node" x="830" y="396" width="248" height="86" rx="10"/>
         <text class="t-title" x="954" y="421" text-anchor="middle">Speech synthesis</text>
@@ -262,55 +262,53 @@ svg { font-family: var(--sans); }
     <figure>
       <div class="frame timeline">
         <svg viewBox="0 0 1000 196" role="img"
-             aria-label="Latency of one Hindi sentence, from the moment the speaker stops. Heard in Tamil, through English: pause detection 0.5 s, transcript at 0.52 s, translation done at 1.19 s, translated speech starts at 1.58 s, heard by the listener at 1.83 s. Heard in English, one translation call: transcript at 0.52 s, translation done at 0.78 s, speech starts at 1.15 s, heard at 1.33 s.">
-          <!-- scale: x = 160 + ms * 0.32 ; 2500 ms = 960 -->
+             aria-label="Latency of one Hindi sentence, from the moment the speaker stops. Heard in Tamil, one direct translation call: pause detection 0.5 s, transcript at 0.52 s, translation done at 0.96 s, translated speech starts at 1.35 s, heard by the listener at 1.59 s. Heard in English, one call: transcript at 0.52 s, translation done at 0.83 s, speech starts at 1.21 s, heard at 1.39 s.">
+          <!-- scale: x = 160 + ms * 0.4 ; 2000 ms = 960 -->
           <line class="axis" x1="160" y1="156" x2="960" y2="156"/>
           <line class="axis" x1="160" y1="150" x2="160" y2="162"/>
-          <line class="axis" x1="320" y1="150" x2="320" y2="162"/>
-          <line class="axis" x1="480" y1="150" x2="480" y2="162"/>
-          <line class="axis" x1="640" y1="150" x2="640" y2="162"/>
-          <line class="axis" x1="800" y1="150" x2="800" y2="162"/>
+          <line class="axis" x1="360" y1="150" x2="360" y2="162"/>
+          <line class="axis" x1="560" y1="150" x2="560" y2="162"/>
+          <line class="axis" x1="760" y1="150" x2="760" y2="162"/>
           <line class="axis" x1="960" y1="150" x2="960" y2="162"/>
           <text class="t-tick" x="160" y="178" text-anchor="middle">0 s</text>
-          <text class="t-tick" x="320" y="178" text-anchor="middle">0.5 s</text>
-          <text class="t-tick" x="480" y="178" text-anchor="middle">1.0 s</text>
-          <text class="t-tick" x="640" y="178" text-anchor="middle">1.5 s</text>
-          <text class="t-tick" x="800" y="178" text-anchor="middle">2.0 s</text>
-          <text class="t-tick" x="960" y="178" text-anchor="middle">2.5 s</text>
+          <text class="t-tick" x="360" y="178" text-anchor="middle">0.5 s</text>
+          <text class="t-tick" x="560" y="178" text-anchor="middle">1.0 s</text>
+          <text class="t-tick" x="760" y="178" text-anchor="middle">1.5 s</text>
+          <text class="t-tick" x="960" y="178" text-anchor="middle">2.0 s</text>
           <text class="t-row-sub" x="148" y="160" text-anchor="end">after speaker stops</text>
 
-          <!-- Hindi -> Tamil: 0-500 pause, 500-519 ASR, 519-1190 translate (two calls), 1190-1577 TTS, 1577-1827 network -->
+          <!-- Hindi -> Tamil: 0-500 pause, 500-520 ASR, 520-960 translate (direct), 960-1350 TTS, 1350-1590 network -->
           <text class="t-row" x="148" y="46" text-anchor="end">Hindi → Tamil</text>
-          <text class="t-row-sub" x="148" y="62" text-anchor="end">via English</text>
-          <rect class="seg-wait" x="160" y="32" width="160" height="34"/>
-          <rect class="seg-model" x="320" y="32" width="6.1" height="34"/>
-          <rect class="seg-model" x="326.1" y="32" width="214.7" height="34"/>
-          <rect class="seg-model" x="540.8" y="32" width="123.8" height="34"/>
-          <rect class="seg-net" x="664.6" y="32" width="80" height="34"/>
-          <text class="t-seg" x="240" y="53" text-anchor="middle">pause detection</text>
-          <text class="t-seg" x="433.4" y="53" text-anchor="middle">translate via English</text>
-          <text class="t-seg" x="602.7" y="53" text-anchor="middle">speech synthesis</text>
-          <text class="t-seg" x="704.6" y="53" text-anchor="middle">network</text>
-          <text class="t-end" x="753" y="54">1.83 s</text>
+          <text class="t-row-sub" x="148" y="62" text-anchor="end">direct, one call</text>
+          <rect class="seg-wait" x="160" y="32" width="200" height="34"/>
+          <rect class="seg-model" x="360" y="32" width="8" height="34"/>
+          <rect class="seg-model" x="368" y="32" width="176" height="34"/>
+          <rect class="seg-model" x="544" y="32" width="156" height="34"/>
+          <rect class="seg-net" x="700" y="32" width="96" height="34"/>
+          <text class="t-seg" x="260" y="53" text-anchor="middle">pause detection</text>
+          <text class="t-seg" x="456" y="53" text-anchor="middle">translate</text>
+          <text class="t-seg" x="622" y="53" text-anchor="middle">speech synthesis</text>
+          <text class="t-seg" x="748" y="53" text-anchor="middle">network</text>
+          <text class="t-end" x="804" y="54">1.59 s</text>
 
-          <!-- Hindi -> English: 0-500, 500-522 ASR, 522-775 translate, 775-1153 TTS, 1153-1333 network -->
+          <!-- Hindi -> English: 0-500, 500-522 ASR, 522-830 translate, 830-1210 TTS, 1210-1390 network -->
           <text class="t-row" x="148" y="104" text-anchor="end">Hindi → English</text>
           <text class="t-row-sub" x="148" y="120" text-anchor="end">one call</text>
-          <rect class="seg-wait" x="160" y="90" width="160" height="34"/>
-          <rect class="seg-model" x="320" y="90" width="7" height="34"/>
-          <rect class="seg-model" x="327" y="90" width="81" height="34"/>
-          <rect class="seg-model" x="408" y="90" width="121" height="34"/>
-          <rect class="seg-net" x="529" y="90" width="57.6" height="34"/>
-          <text class="t-seg" x="240" y="111" text-anchor="middle">pause detection</text>
-          <text class="t-seg" x="367.5" y="111" text-anchor="middle">translate</text>
-          <text class="t-seg" x="468.5" y="111" text-anchor="middle">speech synthesis</text>
-          <text class="t-seg" x="557.8" y="111" text-anchor="middle">network</text>
-          <text class="t-end" x="595" y="112">1.33 s</text>
+          <rect class="seg-wait" x="160" y="90" width="200" height="34"/>
+          <rect class="seg-model" x="360" y="90" width="8.8" height="34"/>
+          <rect class="seg-model" x="368.8" y="90" width="123.2" height="34"/>
+          <rect class="seg-model" x="492" y="90" width="152" height="34"/>
+          <rect class="seg-net" x="644" y="90" width="72" height="34"/>
+          <text class="t-seg" x="260" y="111" text-anchor="middle">pause detection</text>
+          <text class="t-seg" x="430.4" y="111" text-anchor="middle">translate</text>
+          <text class="t-seg" x="568" y="111" text-anchor="middle">speech synthesis</text>
+          <text class="t-seg" x="680" y="111" text-anchor="middle">network</text>
+          <text class="t-end" x="724" y="112">1.39 s</text>
         </svg>
       </div>
       <figcaption>Measured in the two-caller test (a 6.5 s Hindi sentence). The half-second pause that tells
         the system a sentence has ended is the largest fixed cost; speech recognition is the thin sliver after it
-        (about 20 ms). Between two Indian languages the translation goes through English, two model calls.</figcaption>
+        (about 20 ms). Between two Indian languages the translation is one direct model call.</figcaption>
     </figure>
   </section>
 
@@ -321,10 +319,11 @@ svg { font-family: var(--sans); }
       <li><b>Private tracks, not mixing</b><span>The worker publishes one translated track per listener and
         LiveKit's subscription permissions keep it theirs. Same-language pairs skip translation and hear
         each other's own voice.</span></li>
-      <li><b>The model sets the route</b><span>sarvam-translate translates English to and from the Indian
-        languages. Between two Indian languages the worker goes through English, as the model card says.</span></li>
+      <li><b>Direct translation, shared speech</b><span>indic-translate translates directly between any two
+        of 22 Indian languages and English. Every listener language is translated at once in one GPU batch,
+        and each language is synthesized once, however many listeners hear it.</span></li>
       <li><b>NVIDIA NIM wherever NVIDIA supports it</b><span>AI4Bharat's IndicConformer models, converted with
-        NVIDIA's nemo2riva and riva-build, run in the Riva ASR NIM; sarvam-translate and indic-speak's speech LM run
+        NVIDIA's nemo2riva and riva-build, run in the Riva ASR NIM; indic-translate and indic-speak's speech LM run
         on the model-free LLM NIM. Only the VAD that cuts calls into utterances and indic-speak's audio decoder are
         our own code.</span></li>
       <li><b>Self-healing calls</b><span>If the worker restarts or crashes, the web app's watchdog sends

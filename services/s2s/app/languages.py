@@ -1,10 +1,14 @@
 """Languages the call can use, from what each model service supports.
 
 "speak" languages are the ones with an IndicConformer model in the ASR NIM (Malayalam,
-Hindi, Kannada, Telugu, Tamil; services/asr-nim/build adds more). "hear" languages are what sarvam-translate can target and indic-speak can voice:
-the 22 scheduled Indian languages plus English. TTS quality tiers come from the
-indic-speak model card.
+Hindi, Kannada, Telugu, Tamil; services/asr-nim/build adds more). "hear" languages are
+what indic-translate can target and indic-speak can voice: the 22 scheduled Indian
+languages plus English. TTS quality tiers come from the indic-speak model card.
+
+On other model servers (docker-compose.shared.yml: Parakeet, Riva Translate, Magpie),
+S2S_SPEAK_LANGUAGES and S2S_HEAR_LANGUAGES narrow both lists to what those cover.
 """
+import os
 
 LANGUAGES = {
     # code: (English name, native name, TTS tier)
@@ -33,15 +37,33 @@ LANGUAGES = {
     "en": ("English", "English", "production"),
 }
 
-# Languages with a speech recognition model in the ASR NIM. Riva serves each under its own
-# language code (ml-IN, hi-IN, ...); asr.py adds the region.
-ASR_LANGUAGES = {"hi", "kn", "ml", "ta", "te"}
-SPEAK = [code for code in LANGUAGES if code in ASR_LANGUAGES]
-HEAR = list(LANGUAGES)
+def _env_list(name: str, default: set[str]) -> set[str]:
+    return {c.strip() for c in os.environ.get(name, "").split(",") if c.strip() in LANGUAGES} or default
 
-# The target-language names sarvam-translate's prompt takes: its model card lists the
-# plain English names, the same as the first column above.
-PROMPT_NAME = {code: v[0] for code, v in LANGUAGES.items()}
+
+# Languages with a speech recognition model in the ASR NIM. Riva serves each under its own
+# language code (ml-IN, hi-IN, ...; English: en-US, see ASR_CODE).
+ASR_LANGUAGES = _env_list("S2S_SPEAK_LANGUAGES", {"hi", "kn", "ml", "ta", "te"})
+ASR_CODE = {code: f"{code}-IN" for code in LANGUAGES} | {"en": "en-US"}
+SPEAK = [code for code in LANGUAGES if code in ASR_LANGUAGES]
+HEAR = [code for code in LANGUAGES if code in _env_list("S2S_HEAR_LANGUAGES", set(LANGUAGES))]
+
+# The target-language names indic-translate's prompt expects (LANGUAGE_NAMES in the model's
+# scripts/prompt_contract.py): the English names above, with the script spelled out for
+# languages the model writes in two scripts. The qualifier selects the output script.
+PROMPT_NAME = {code: v[0] for code, v in LANGUAGES.items()} | {
+    "ks": "Kashmiri (Perso-Arabic script)",
+    "mni": "Manipuri (Meitei script)",
+    "sd": "Sindhi (Devanagari script)",
+}
+
+# The script each language is written in (the first word of its letters' Unicode names), as
+# PROMPT_NAME selects it. Used to spot translations that copied source-script words over.
+SCRIPT = {code: "DEVANAGARI" for code in ("brx", "doi", "hi", "kok", "mai", "mr", "ne", "sa", "sd")} | {
+    "as": "BENGALI", "bn": "BENGALI", "gu": "GUJARATI", "kn": "KANNADA", "ks": "ARABIC",
+    "ml": "MALAYALAM", "mni": "MEETEI", "or": "ORIYA", "pa": "GURMUKHI", "sat": "OL",
+    "ta": "TAMIL", "te": "TELUGU", "ur": "ARABIC", "en": "LATIN",
+}
 
 
 def describe() -> dict:

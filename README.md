@@ -18,11 +18,11 @@ the speaker stopping to the listener hearing the translation.
 | Service | Model | Port | Runtime | API |
 |---|---|---|---|---|
 | `asr` | AI4Bharat IndicConformer, one 120M Conformer-CTC per language ([`ai4bharat/indicconformer_stt_<lang>_hybrid_ctc_rnnt_large`](https://huggingface.co/ai4bharat/indicconformer_stt_ml_hybrid_ctc_rnnt_large)): Malayalam, Hindi, Kannada, Telugu, Tamil | 8001 (HTTP), 50051 (gRPC) | NVIDIA Riva ASR NIM, custom models (nemo2riva → riva-build, TensorRT) | `POST /v1/audio/transcriptions`, one request per utterance of ≤16 s |
-| `translate` | [`sarvamai/sarvam-translate`](https://huggingface.co/sarvamai/sarvam-translate) (Gemma 3 4B, 22 Indian languages + English) | 8002 | NVIDIA model-free LLM NIM 2.0.13 (vLLM 0.28) | OpenAI chat completions, SSE: text deltas out |
+| `translate` | [`bodhan-ai/indic-translate`](https://huggingface.co/bodhan-ai/indic-translate) (Gemma-4-E4B, 22 Indian languages + English, direct between any two) | 8002 | NVIDIA model-free LLM NIM 2.0.13 (vLLM 0.28) | OpenAI chat completions, SSE: text deltas out |
 | `tts-lm` | [`bodhan-ai/indic-speak`](https://huggingface.co/bodhan-ai/indic-speak)'s speech LM (Llama-3.2-3B emitting audio tokens) | 8004 | NVIDIA model-free LLM NIM 2.0.13 | OpenAI completions, token ids in and out |
 | `tts` | indic-speak's audio decoder (SNAC + Vocos) and the TTS API (22 Indian languages + English) | 8003 | our image: Python + CUDA torch 2.13 | WebSocket / chunked HTTP: PCM out |
 
-All four share one NVIDIA L40S (46 GB) and use 36.3 GB together. On disk, the
+All four share one NVIDIA L40S (46 GB) and use 40.3 GB together. On disk, the
 Riva NIM image takes 37 GB (it is the Whisper Large v3 NIM image, used only as the Riva
 runtime) and the model-free NIM image 43.8 GB (one copy, used by both `translate` and
 `tts-lm`).
@@ -32,12 +32,15 @@ container and Bodhan AI indic-translate (code in
 `archive/previous-setup-2026-10-24.tar.gz`; [docs/NIM_POC.md](docs/NIM_POC.md) showed the
 model-free NIM serves a local checkpoint unchanged). Then ASR moved to NVIDIA's Whisper
 Large v3 NIM, which wrote Malayalam in Gurmukhi script (~92% character errors), so
-IndicConformer came back, this time inside NVIDIA's Riva NIM.
+IndicConformer came back, this time inside NVIDIA's Riva NIM. Translation used
+sarvamai/sarvam-translate until 2026-10-26. In a real Malayalam ↔ Kannada call it invented
+meanings and sometimes commented on the text instead of translating it, so indic-translate
+came back, now on the NIM with the same deployment and parallel translation.
 
 ```
 indicspeechModels/
 ├── docker-compose.yml        # model services + call stack, started in order
-├── models/                   # weights (mounted read-only at /models): sarvam-translate, indic-speak, snac_24khz
+├── models/                   # weights (mounted read-only at /models): indic-translate, indic-speak, snac_24khz, indicconformer-<lang>
 ├── nim-cache/                # the LLM NIMs' caches (compile caches, runtime manifests)
 ├── nim-export/asr-indic/     # the ASR NIM's model repository (custom_model.tar.gz, built)
 ├── services/tts/             # indic-speak audio decoder + TTS API (Dockerfile + app/)
@@ -149,22 +152,25 @@ curl -s localhost:8001/v1/audio/transcriptions -F language=hi-IN -F file=@testda
 
 ## Translate — `http://host:8002/v1/chat/completions`
 
-sarvam-translate on NVIDIA's model-free LLM NIM, an OpenAI-compatible server, so any
-OpenAI client works. The request follows the model card: the target language in a
-system message, the text as the user message.
+bodhan-ai/indic-translate on NVIDIA's model-free LLM NIM, an OpenAI-compatible server, so
+any OpenAI client works. The caller builds the prompt, following the model's prompt
+contract (`models/indic-translate/scripts/prompt_contract.py`):
 
 ```json
-{"model": "sarvam-translate", "stream": true, "temperature": 0, "max_tokens": 256,
- "messages": [{"role": "system", "content": "Translate the text below to English."},
-              {"role": "user", "content": "कल सुबह दस बजे मैं आपको फ़ोन करूँगा।"}]}
+{"model": "indic-translate", "stream": true, "temperature": 0, "stop": ["<turn|>"], "max_tokens": 256,
+ "messages": [{"role": "user", "content": "Translate the following text into Kannada:\n\nലവണി എന്തെങ്കിലും പറയാമോ."}]}
 ```
 
-- Target names are plain language names: `Hindi`, `Tamil`, `Manipuri`, `English`, …
-  (`PROMPT_NAME` in `services/s2s/app/languages.py` maps the ISO codes). The model
-  infers the source language.
-- The open checkpoint translates **English ↔ the 22 Indian languages**. Between two
-  Indian languages the model card says to go through English: two calls, source →
-  English, then English → target. The call agent does that automatically.
+- One `user` message and no `system` message. It names only the **target** language;
+  the model infers the source. It translates **directly between any two** of the 22
+  Indian languages and English.
+- Target names are the model's: `Tamil`, `Hindi`, `English`, and
+  `Kashmiri (Perso-Arabic script)`, `Manipuri (Meitei script)`,
+  `Sindhi (Devanagari script)` for the languages written in two scripts.
+  `Hindi (Roman)` and `Hindi (code-mixed)` also work. The agent's ISO-code → name table
+  is `PROMPT_NAME` in `services/s2s/app/languages.py`.
+- **End every sentence with punctuation.** Speech recognition writes none, and without
+  it the model often swaps names (see "Cleaning up speech-recognition text" below).
 - `stream: true` returns Server-Sent Events whose `choices[0].delta.content` pieces
   make up the translation, ending with `data: [DONE]`.
 - Concurrent requests share one batch on the GPU; there is no batch endpoint.
@@ -230,18 +236,29 @@ cleaner than a real caller, so treat these as a floor, not a forecast):
 
 The Riva results are identical to the same models run in NeMo.
 
-**Translate** (sarvam-translate). Sentences are ~15 words, Indian language →
-English, each request its own streamed HTTP call.
+**Translate** (indic-translate). Sentences are ~10–15 words, Indian language → Indian
+language directly, each request its own streamed HTTP call.
 
 | concurrency | first text p50 | full sentence p50 | throughput |
 |---|---|---|---|
-| 1 | 25 ms | 201 ms | — |
-| 8 | 39 ms | 202 ms | 36 sentences/s |
-| 32 | 79–94 ms | 242 ms | 106–111 sentences/s |
-| 64 | 165–174 ms | 335 ms | 147 sentences/s |
+| 1 | 45 ms | 373 ms | — |
+| 8 | 73 ms | 260 ms | 20 sentences/s |
+| 32 | 114 ms | 322 ms | 68 sentences/s |
+| 64 | 187 ms | 429 ms | 104 sentences/s |
 
-Between two Indian languages it is two calls; Hindi → Tamil took ~0.35 s for a
-sentence.
+**Translation quality on a real call.** We replayed the 38 recognized utterances of a
+live Malayalam ↔ Kannada call through both translators (36 had text that could be
+judged):
+
+| | right | partly right | wrong | invented content or commentary |
+|---|---|---|---|---|
+| sarvam-translate (via English) | 15 | 8 | 13 | 6 |
+| indic-translate (direct) | 15 | 14 | 7 | 0 |
+
+indic-translate stays faithful. When the recognized text is garbled, or English words
+were written phonetically in Kannada or Malayalam script, it copies them over
+phonetically instead of translating. Most of the remaining errors start in speech
+recognition, which garbles casual speech and English words mixed into it.
 
 **TTS.** Each stream is one sentence of 7–9 s of audio. The real-time factor
 (RTF) is generation time divided by audio length, so above 1.0 the listener
@@ -274,6 +291,27 @@ Re-run the benchmarks:
 ```
 
 ## Translated calls (LiveKit)
+
+> **Running on meetmind's model servers, for now (2026-10-27).** `.env` sets
+> `COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml`, so `docker compose up -d` starts
+> only `s2s-agent`, `s2s-web` and `proxy`. They use the models meetmind deploys on this host:
+> - recognition: Parakeet 1.1B RNNT multilingual on a Riva ASR NIM, `127.0.0.1:8001`, the same HTTP API as the IndicConformer NIM;
+> - translation: Riva Translate 1.6B, `127.0.0.1:8002` (`TRANSLATE_API=riva`);
+> - speech: Magpie TTS on the GPU host (`TTS_API=magpie`);
+> - LiveKit: meetmind's server, `127.0.0.1:7880`, which has this repo's `LIVEKIT_API_KEY` added to its keys.
+>
+> Callers speak and hear English or Hindi, the languages all three models share. The agent joins only rooms that ask for
+> it by name (`S2S_AGENT_NAME`, default `indic-s2s`, in each caller's token), never meetmind's
+> calls. Measured on an English ↔ Hindi call (`clients/call_test_en_hi.py`), from the speaker stopping:
+>
+> | Stage | Time |
+> |---|---|
+> | Final transcript (the 500 ms VAD pause plus ~50 ms ASR) | ~0.55 s |
+> | Translated | ~0.83 s |
+> | Speech starts playing | ~0.89 s |
+>
+> To use this repo's own models again, remove `COMPOSE_FILE` from `.env`. The full stack's images were removed to free
+> disk; `up -d --build` pulls and builds them again (~56 GB).
 
 ```
 browser A ──mic──┐                                   ┌──► "translation-A" ──► browser A
@@ -321,22 +359,48 @@ listener's `hear` equals the speaker's `speak`, nothing is translated and the pa
 plays the speaker's own voice. Otherwise the page plays only the translation; an
 "original voice" slider can mix the speaker's own voice back in.
 
-**Translation route.** Fixed by the model: a turn with English on either side is one
-call; between two Indian languages the agent goes through English (`route()` in
-`agent.py`). That English step runs once per sentence and serves every listener
-language, and it is the translation for anyone who hears English. Captions show the English step ("via English") when the page's setting
-is on. Going through English can lose register: once, a formal "you" came back as
-the informal "உனக்கு" in Tamil.
+**Translation route.** `S2S_PIVOT_THROUGH_ENGLISH` in the agent's environment picks the
+route between two Indian languages:
+
+```bash
+S2S_PIVOT_THROUGH_ENGLISH=0   # direct, source -> target (default)
+S2S_PIVOT_THROUGH_ENGLISH=1   # source -> English -> target, as with sarvam-translate
+```
+
+Direct is one model call and keeps meaning and register; going through English can
+lose register (a formal "you" came back as the informal "உனக்கு" in Tamil). With the
+pivot on, the English step runs once per sentence and serves every listener language,
+and captions can show it ("via English"). Translations into or out of English are always
+one call. Set it in `.env` and run `docker compose up -d s2s-agent`.
+
+**Cleaning up speech-recognition text for the translator** (`TranslateClient` in
+`agent.py`):
+
+- *End mark.* ASR writes no punctuation, and without a sentence end indic-translate
+  often swaps names and places. In a live call, "…നാളെ പാലക്കാട് പോയാലോ…" ("…go to
+  Palakkad tomorrow…") came out as "let's all think about going to new york tomorrow";
+  other tests gave Mumbai, Chennai, Shimla, "John", even "Trump". So the agent adds "।"
+  (Hindi, Bengali, Odia, Punjabi…) or "." first. In our tests that fixed every swapped
+  name (0 of 63 into English, against most of them before).
+- *Respelling.* Between two Indian languages, ~5% of outputs (more on garbled speech)
+  keep a word, often a name, in the source script. That reads wrong and makes TTS babble,
+  so the agent respells those letters in the target script (Unicode keeps the Indian
+  scripts letter for letter at the same offsets): "മൈസൂರಿಗೆ" → "മൈസൂരിഗെ". Over 252 test
+  translations, none were left in mixed scripts. Retrying without the end mark was worse,
+  because it sometimes brought the name swap back.
 
 **Per utterance:** the agent takes the caller's mic (16 kHz; echo-cancelled when playout
 leaks into it, see below), runs Silero VAD on it (`services/s2s/app/vad.py`, CPU) and
 sends each finished utterance to the ASR NIM (`services/s2s/app/asr.py`). On each final
 transcript, it translates into every listener language at the same time (streaming the
-text as captions), and each language goes to its listeners' TTS sockets as soon as it is
-ready; TTS plays utterances in order. Each listener's track only lets that listener
-subscribe (publisher-side permissions). Every listener gets their own synthesized voice,
-so one person speaking in a call of N people means N−1 voices at once: TTS (6–7
-real-time voices) keeps calls up to about 5–7 people smooth.
+text as captions), and each language goes to TTS as soon as it is ready: **once per
+language**, with the audio copied to every listener of that language (`Synthesizer` in
+`agent.py`). Each listener has their own track, which only they may subscribe to
+(publisher-side permissions), and their own playback queue that plays utterances in
+order. So one person speaking means one voice per distinct listener language, at most
+N−1 in a call of N people. TTS (6–7 real-time voices) keeps calls with up to about 5–7
+listener languages smooth, and people sharing a language cost nothing extra. A call never
+runs more syntheses at once than it has listeners.
 Transcripts, translations and per-utterance latency go to every caller on the
 `captions` data topic: `transcript`, `translation`, `metrics` and `status`
 messages, see `agent.py`.
@@ -347,17 +411,17 @@ the utterance so far is re-transcribed every half second, ~25 ms per request.
 **Measured** with two simulated callers in real time (`clients/call_test.py`). Times are
 from the moment the speaker stops talking:
 
-| | Hindi → Tamil (6.5 s, via English) | Tamil → Hindi (via English) | Hindi → English |
+| | Hindi → Tamil (6.5 s, direct) | Tamil → Hindi (direct) | Hindi → English |
 |---|---|---|---|
 | final transcript | 0.50 s (the VAD pause; ASR adds ~20 ms) | 0.50 s | 0.52 s |
-| translation complete | 1.19 s | 0.81 s | 0.78 s |
-| translated speech starts (agent) | 1.58 s | 1.19 s | 1.15 s |
-| translated speech heard (other caller, after WebRTC) | 1.83 s | — | 1.33 s |
+| translation complete | 0.96 s | 0.67–0.71 s | 0.83 s |
+| translated speech starts (agent) | 1.35 s | 1.05–1.10 s | 1.21 s |
+| translated speech heard (other caller, after WebRTC) | 1.59 s | — | 1.39 s |
 
-With the Whisper NIM, the same turns were heard at 2.16 s and 1.79 s. Most of what is
-left is the 0.5 s pause that ends an utterance (`S2S_VAD_MIN_SILENCE_MS`), the two
-translation calls between Indian languages (~0.6 s), and TTS until the first audio
-(~0.4 s). The browser test (`clients/browser_test.js`, two headless Chromium callers with
+With sarvam-translate (through English) the same turns were heard at 1.83 s and 1.33 s,
+and with the Whisper NIM at 2.16 s and 1.79 s. Most of what is left is the 0.5 s pause
+that ends an utterance (`S2S_VAD_MIN_SILENCE_MS`), translation (~0.4 s), and TTS until
+the first audio (~0.4 s). The browser test (`clients/browser_test.js`, two headless Chromium callers with
 WAV files as microphones) showed the same captions and 1.1–1.6 s delays on the real page.
 
 ```bash
@@ -371,16 +435,25 @@ the moment the speaker stopped:
 
 | Speaker | First listener | Second listener |
 |---|---|---|
-| Asha (Hindi) | Bala (Tamil) 1.92 s | Chitra (Malayalam) 1.89 s |
-| Chitra (Malayalam) | Asha (Hindi) 1.87 s | Bala (Tamil) 2.05 s |
-| Asha (Hindi) | Bala (English) 1.74 s | Chitra (Malayalam) 2.24 s |
+| Asha (Hindi) | Bala (Tamil) 1.72 s | Chitra (Malayalam) 1.73 s |
+| Chitra (Malayalam) | Asha (Hindi) 1.55 s | Bala (Tamil) 1.68 s |
+| Asha (Hindi) | Bala (English) 1.68 s | Chitra (Malayalam) 1.88 s |
 
-Before the languages ran in parallel with a shared English step, the second listener
-waited for the first: 3.28 s and 3.12 s in the same turns. Every listener receives only
+All listener languages are translated in parallel (with sarvam-translate through English:
+1.77–2.25 s). Before that, the second listener waited for the first: 3.28 s and 3.12 s
+in the same turns. Every listener receives only
 their own translated track.
 
 ```bash
 docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test3.py
+```
+
+**Two listeners, one language** (`clients/call_test_shared.py`): Asha speaks Hindi while
+Bala and Chitra both hear Tamil. One synthesis serves both (identical TTS stats: 9.05 s
+of audio, first audio after 371 ms), and both heard it at 1.57 s.
+
+```bash
+docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test_shared.py
 ```
 
 **Echo protection.** A browser's echo cancellation removes only its own speaker's sound.
@@ -472,9 +545,10 @@ Live captions come from re-transcribing the utterance so far.
 
 **Translate.** The NIM's vLLM 0.28 reserves very little KV cache at a GPU share
 (~1.5 GiB at 0.50 for indic-translate), so the size is pinned with
-`--kv-cache-memory-bytes` (4 GiB, 18,507 tokens for Gemma 3 4B). Its first burst of
-concurrent requests stalls ~1 s while batched-decode kernels compile, which is why the
-healthcheck sends one before reporting healthy.
+`--kv-cache-memory-bytes` (3 GiB, 24,111 tokens; small enough that the model fits next
+to ASR and TTS). `--language-model-only` skips Gemma-4's vision and audio encoders. The
+first burst of concurrent requests stalls ~1 s while batched-decode kernels compile,
+which is why the healthcheck sends one before reporting healthy.
 
 **TTS (`services/tts/app/`)**
 
@@ -494,13 +568,17 @@ healthcheck sends one before reporting healthy.
   up to 4 frames per vocoder call. Concurrent streams' vocoder calls are batched
   together on the GPU.
 - Sampling follows the model card's production config (temperature 0.6, top-p 0.9,
-  repetition penalty 1.2). Generation length is capped from the text length so a
-  runaway generation can't babble for 30 s.
+  repetition penalty 1.2). Now and then the speech LM doesn't stop and babbles on (we
+  saw ~1 in 12 runs of a short punctuated sentence, ~1 in 4 unpunctuated), so generation
+  is capped at characters ÷ 9 + 1.2 s per chunk. None of 144 normal clips in six
+  languages spoke slower than that; a babbling short sentence now stops at ~5 s instead
+  of ~9 s. `TTS_MIN_CHARS_PER_S` changes the 9.
 
 ## Operations
 
-- **GPU budget** (46 GB L40S): ASR NIM 11.8 GB (five fp32 engines), translate 11.2 GB,
-  tts-lm 12.4 GB, tts decoder 0.9 GB: 36.3 GB in all. The `dsx-explorer` compose project
+- **GPU budget** (46 GB L40S): translate 16.9 GB (indic-translate, 3 GiB KV cache), ASR
+  NIM 10–12 GB (five fp32 engines), tts-lm 12.4 GB, tts decoder 0.9 GB: 40.3 GB in all,
+  ~5.7 GB free. The `dsx-explorer` compose project
   (`/home/ubuntu/DigitalTwin/deploy`) stays stopped.
 - **Startup order** is asr → translate → tts-lm → tts → s2s-agent
   (`depends_on: service_healthy`). Each engine sizes its memory from what is free when
@@ -528,8 +606,7 @@ healthcheck sends one before reporting healthy.
   pulling needs an NGC key, and production use needs an NVIDIA AI Enterprise licence. The
   ASR image is governed by the NVIDIA AI Product Agreement (shown in its startup log).
 - **IndicConformer** checkpoints are MIT (AI4Bharat's model cards).
-- **sarvam-translate** is GPL-3.0 (its model card).
-- **indic-speak** is under the **Indic Open Model License v1.0** (Bodhan AI / AI4Bharat).
+- **indic-translate** and **indic-speak** are under the **Indic Open Model License v1.0** (Bodhan AI / AI4Bharat).
   Self-hosting for your own product is free, with attribution ("Built with … from
   Bodhan AI / AI4Bharat"). Running it as an API that **other companies call directly**
   needs Bodhan AI's written approval, unless you are a nonprofit, government or academic

@@ -17,7 +17,7 @@ Every example here was run against the live services. Runnable copies are in
 | File | Shows |
 |---|---|
 | [`asr_transcribe.py`](examples/asr_transcribe.py) | transcribe a file with the ASR NIM (HTTP), cutting files longer than 15 s at pauses |
-| [`translate.py`](examples/translate.py) | one sentence, streamed (SSE), several at once, and Indian → Indian through English (OpenAI chat API) |
+| [`translate.py`](examples/translate.py) | one sentence, streamed (SSE), several at once, and Indian → Indian directly or, with `--pivot`, through English (OpenAI chat API) |
 | [`tts.py`](examples/tts.py) | WAV over HTTP, streamed HTTP, streamed WebSocket |
 | [`speech_to_speech.py`](examples/speech_to_speech.py) | all three chained: speech file → translated speech file |
 
@@ -45,15 +45,15 @@ also benchmark concurrency (`--bench`).
 
 | | ASR | Translate | TTS |
 |---|---|---|---|
-| Model | AI4Bharat IndicConformer (120M Conformer-CTC, one per language) | `sarvamai/sarvam-translate` (Gemma 3 4B) | `bodhan-ai/indic-speak` (Llama-3.2-3B + Vocos) |
+| Model | AI4Bharat IndicConformer (120M Conformer-CTC, one per language) | `bodhan-ai/indic-translate` (Gemma 4 E4B) | `bodhan-ai/indic-speak` (Llama-3.2-3B + Vocos) |
 | Runs in | NVIDIA Riva ASR NIM, custom models (the `whisper-large-v3:1.5.1` image as the Riva runtime) | NVIDIA model-free LLM NIM 2.0.13 | speech LM: model-free LLM NIM (`tts-lm`); audio decoding and API: our `tts` service |
 | Base URL | `http://localhost:8001` (HTTP), `localhost:50051` (gRPC) | `http://localhost:8002/v1` (OpenAI-compatible) | `http://localhost:8003` |
 | One-shot | `POST /v1/audio/transcriptions` | `POST /v1/chat/completions` | `POST /v1/tts` |
 | Streaming | none: offline, one request per utterance of at most 16 s | `stream: true` (SSE): text deltas out | `WS /v1/stream` or chunked HTTP: audio out |
 | Discovery | — (languages in [3](#3-languages)) | `GET /v1/models` | `GET /v1/voices` |
 | Health | `GET /v1/health/ready` | `GET /v1/health/ready` | `GET /health` |
-| Languages | 5 Indian: Malayalam, Hindi, Kannada, Telugu, Tamil | 22 Indian + English; English ↔ Indian (Indian ↔ Indian through English) | 22 Indian + English |
-| Typical latency | ~25 ms for a 6.5 s utterance | first text ~25 ms, sentence ~0.2 s | first audio ~0.38 s |
+| Languages | 5 Indian: Malayalam, Hindi, Kannada, Telugu, Tamil | 22 Indian + English, directly between any two | 22 Indian + English |
+| Typical latency | ~25 ms for a 6.5 s utterance | first text ~45 ms, sentence ~0.37 s | first audio ~0.38 s |
 
 Conventions shared by all three:
 
@@ -134,17 +134,17 @@ docker compose logs -f asr
 | `hi` | Hindi | `hi-IN` | `Hindi` | Kavya / Amit | production |
 | `kn` | Kannada | `kn-IN` | `Kannada` | Deepika / Adarsh | production |
 | `kok` | Konkani | ✗ | `Konkani` | Anjali / Sandeep | preview |
-| `ks` | Kashmiri | ✗ | `Kashmiri` | Zoon / Ishfaq | preview |
+| `ks` | Kashmiri | ✗ | `Kashmiri (Perso-Arabic script)` | Zoon / Ishfaq | preview |
 | `mai` | Maithili | ✗ | `Maithili` | Vaidehi / Madhukar | preview |
 | `ml` | Malayalam | `ml-IN` | `Malayalam` | Lakshmi / Kiran | production |
-| `mni` | Manipuri | ✗ | `Manipuri` | Thoibi / Chaoba | preview |
+| `mni` | Manipuri | ✗ | `Manipuri (Meitei script)` | Thoibi / Chaoba | preview |
 | `mr` | Marathi | ✗ | `Marathi` | Anagha / Chinmay | production |
 | `ne` | Nepali | ✗ | `Nepali` | Srijana / Sagar | preview |
 | `or` | Odia | ✗ | `Odia` | Itishree / Akash | production |
 | `pa` | Punjabi | ✗ | `Punjabi` | Kaur / Manpreet | production |
 | `sa` | Sanskrit | ✗ | `Sanskrit` | Bharati / Aryaman | preview |
 | `sat` | Santali | ✗ | `Santali` | Phulmani / Sibu | preview |
-| `sd` | Sindhi | ✗ | `Sindhi` | Moomal / Rano | preview |
+| `sd` | Sindhi | ✗ | `Sindhi (Devanagari script)` | Moomal / Rano | preview |
 | `ta` | Tamil | `ta-IN` | `Tamil` | Anitha / Arun | production |
 | `te` | Telugu | `te-IN` | `Telugu` | Sravani / Vamsi | production |
 | `ur` | Urdu | ✗ | `Urdu` | Saba / Zaid | production |
@@ -154,9 +154,11 @@ docker compose logs -f asr
   model; there is no detection and no English. A plain `ml`, or a language with no
   model, returns `404 {"detail": "Model not found for language ml"}`. More
   languages can be added ([4.4](#44-adding-a-language)).
-- **Translate** takes the plain language name in its prompt (see
-  [5.1](#51-the-request-format)). The model card doesn't say which script Sindhi,
-  Kashmiri, Manipuri and Santali come out in; check before relying on them.
+- **Translate** takes the English language name in its prompt (see
+  [5.1](#51-the-request-format)). For Kashmiri, Manipuri and Sindhi the name spells
+  out the script, and that selects the script the translation is written in. Santali
+  comes out in Ol Chiki. `PROMPT_NAME` in `services/s2s/app/languages.py` maps the
+  codes to these names.
 - **TTS** takes the short code or a FLORES code (`tam_Taml`).
 
 ---
@@ -291,45 +293,53 @@ makes an offline, single-window pipeline with NeMo's own mel features and an fp3
 TensorRT engine (the fp16 engine of this model outputs only blanks); `riva-deploy`
 writes the model repository, packed as `nim-export/asr-indic/custom_model.tar.gz`,
 which the NIM loads at start (`NIM_EXPORT_PATH`). It needs the GPU and about 2 GB
-of disk per language while it runs. The five deployed languages use 11.8 GB of GPU
+of disk per language while it runs. The five deployed languages use 10–12 GB of GPU
 memory together.
 
 ---
 
 ## 5. Translate — text to text
 
-Sarvam-Translate is a Gemma 3 4B model fine-tuned by Sarvam AI (with AI4Bharat)
-for the 22 scheduled Indian languages and English. The open checkpoint
-translates **English ↔ an Indian language**; for **Indian ↔ Indian**, the model
-card says to go through English.
+Indic Translate (`bodhan-ai/indic-translate`) is a Gemma 4 E4B model fine-tuned by
+Bodhan AI for the 22 scheduled Indian languages and English. It translates
+**directly between any two of them**, Indian ↔ Indian included, in one call.
+Going through English is optional ([5.4](#54-many-at-once-and-indian--indian)).
 
-The service is NVIDIA's model-free LLM NIM serving the local checkpoint. It
-speaks the **OpenAI chat completions API**, so any OpenAI client works.
+The service is NVIDIA's model-free LLM NIM 2.0.13 (vLLM 0.28) serving the local
+checkpoint. It speaks the **OpenAI chat completions API**, so any OpenAI client
+works.
 
 ### 5.1 The request format
 
-From the model card:
+From the model's prompt contract
+(`models/indic-translate/scripts/prompt_contract.py`):
 
-- **A system message naming the target language:**
-  `Translate the text below to Tamil.`
-- **The text as the user message.** Don't name the source language; the model
-  infers it.
-- **Greedy decoding:** `temperature: 0` (the card's examples use 0.01). Gemma's
-  end-of-turn token ends the reply, so no stop strings are needed.
-- **`model: "sarvam-translate"`** (from `GET /v1/models`).
+- **Exactly one user message:** the instruction, a blank line, then the text:
+  `"Translate the following text into {Target}:\n\n{text}"`.
+- **No system message.** One changes the prompt the model was trained on; the
+  output still reads fluently but is measurably worse.
+- **Name only the target language.** The model infers the source.
+- **Greedy decoding:** `temperature: 0`, with `stop: ["<turn|>"]` (the model's
+  end-of-turn marker) so the reply can't run on past the translation.
+- **`model: "indic-translate"`** (from `GET /v1/models`).
 
-Target names are the plain names in the table in [3](#3-languages): `English`,
-`Hindi`, `Tamil`, `Manipuri`, …
+Target names are the names in the Translate column of the table in
+[3](#3-languages): `English`, `Hindi`, `Tamil`, `Manipuri (Meitei script)`, …
+`Hindi (Roman)` and `Hindi (code-mixed)` work too: "I will call you tomorrow at
+ten in the morning." came back as "Main aapko kal subah das baje phone karunga."
+and "मैं तुम्हें कल सुबह ten बजे call करूँगा।".
+
+Text from speech recognition needs an end mark first; see [5.5](#55-tips).
 
 ### 5.2 One request — `POST /v1/chat/completions`
 
 ```bash
-curl -s localhost:8002/v1/chat/completions -H 'content-type: application/json' -d '{"model": "sarvam-translate", "temperature": 0, "max_tokens": 64, "messages": [{"role": "system", "content": "Translate the text below to Tamil."}, {"role": "user", "content": "How are you?"}]}'
+curl -s localhost:8002/v1/chat/completions -H 'content-type: application/json' -d '{"model": "indic-translate", "temperature": 0, "stop": ["<turn|>"], "max_tokens": 64, "messages": [{"role": "user", "content": "Translate the following text into Tamil:\n\nHow are you?"}]}'
 ```
 
 ```json
-{"id": "chatcmpl-9002d94c0c61f1a2", "object": "chat.completion", "model": "sarvam-translate",
- "choices": [{"index": 0, "message": {"role": "assistant", "content": "எப்படி இருக்கீங்க?"},
+{"id": "chatcmpl-af1610e07f740952", "object": "chat.completion", "model": "indic-translate",
+ "choices": [{"index": 0, "message": {"role": "assistant", "content": "எப்படி இருக்கிறீர்கள்?"},
               "finish_reason": "stop"}],
  "usage": {"prompt_tokens": 21, "completion_tokens": 7, "total_tokens": 28}}
 ```
@@ -338,26 +348,28 @@ curl -s localhost:8002/v1/chat/completions -H 'content-type: application/json' -
 
 - The translation is `choices[0].message.content`.
 - `finish_reason` is `length` if `max_tokens` cut the translation short. Indian
-  scripts can take 2–3× the tokens of the source; the examples cap generation
-  at `2 × characters + 32`.
+  scripts can take 2–3× the tokens of the source (Manipuri in Meitei script: 97
+  tokens for a 48-character English sentence); the examples cap generation at
+  `2 × characters + 32`.
 
-With the OpenAI Python SDK (`pip install openai`):
+With the OpenAI Python SDK (`pip install openai`), here straight from Hindi to
+Kannada:
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8002/v1", api_key="unused")
 stream = client.chat.completions.create(
-    model="sarvam-translate", temperature=0, max_tokens=128, stream=True,
-    messages=[{"role": "system", "content": "Translate the text below to Kannada."},
-              {"role": "user", "content": "I will call you tomorrow at ten in the morning."}],
+    model="indic-translate", temperature=0, stop=["<turn|>"], max_tokens=128, stream=True,
+    messages=[{"role": "user", "content": "Translate the following text into Kannada:\n\n"
+                                          "मैं कल सुबह दस बजे आपको फ़ोन करूँगा।"}],
 )
 for chunk in stream:
     print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
 ```
-ನಾನು ನಾಳೆ ಬೆಳಿಗ್ಗೆ ಹತ್ತು ಗಂಟೆಗೆ ನಿನಗೆ ಫೋನ್ ಮಾಡುತ್ತೇನೆ.
+ನಾನು ನಾಳೆ ಬೆಳಿಗ್ಗೆ ಹತ್ತು ಗಂಟೆಗೆ ನಿಮಗೆ ಫೋನ್ ಮಾಡುತ್ತೇನೆ.
 ```
 
 ### 5.3 Streamed (Server-Sent Events)
@@ -366,15 +378,17 @@ Add `"stream": true`. The response is `text/event-stream`, one JSON chunk per
 `data:` line, and ends with `data: [DONE]`:
 
 ```
-data: {"id": "chatcmpl-ba50...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, ...}]}
-data: {"id": "chatcmpl-ba50...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "రే"}, ...}]}
-data: {"id": "chatcmpl-ba50...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "పు"}, ...}]}
+data: {"id": "chatcmpl-a541...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, ...}]}
+data: {"id": "chatcmpl-a541...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": ""}, ...}]}
+data: {"id": "chatcmpl-a541...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "న"}, ...}]}
+data: {"id": "chatcmpl-a541...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "మస్తే"}, ...}]}
 ...
+data: {"id": "chatcmpl-a541...", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "్నారు?"}, "finish_reason": "stop", ...}]}
 data: [DONE]
 ```
 
-Concatenate `choices[0].delta.content` (some chunks carry an empty string). The
-call agent shows these pieces as live captions.
+Concatenate `choices[0].delta.content` (the first few chunks carry an empty
+string). The call agent shows these pieces as live captions.
 
 ### 5.4 Many at once, and Indian → Indian
 
@@ -383,7 +397,7 @@ them on the GPU, so 8 parallel requests take about as long as one
 ([`examples/translate.py`](examples/translate.py)):
 
 ```bash
-python docs/examples/translate.py "नमस्ते, आप कैसे हैं?"
+python docs/examples/translate.py "नमस्ते, आप कैसे हैं?" --pivot
 ```
 
 ```
@@ -392,28 +406,52 @@ python docs/examples/translate.py "नमस्ते, आप कैसे ह�
 [many]   नमस्ते, आप कैसे हैं?  ->  Hello, how are you?
 [many]   कल सुबह दस बजे मैं आपको फ़ोन करूँगा।  ->  I will call you tomorrow at ten in the morning.
 [many]   मेरी ट्रेन एक घंटा देर से चल रही है।  ->  My train is running an hour late.
+[direct] வணக்கம், நீங்கள் எப்படி இருக்கிறீர்கள்?
 [pivot]  வணக்கம், எப்படி இருக்கிறீர்கள்?   [via English: Hello, how are you?]
 ```
 
-| | English on one side | both Indian |
+Between two Indian languages, translate **directly**. Going through English
+works too, but costs a second call and can lose the register:
+
+| | Direct (default) | Through English (optional) |
 |---|---|---|
-| Path | source → target, one call | source → English → target, two calls you make |
-| Latency (one sentence) | ~130–200 ms | ~350–400 ms |
-| Register | kept | can flatten: "I'll call you" came back with the informal "உனக்கு" in Tamil |
+| Path | source → target, one call | source → English → target, two calls |
+| Latency (one 7–12-word sentence, p50) | 0.26 s | 0.45 s |
+| Register | kept: Hindi "क्या आप मेरे साथ चलेंगे?" stayed formal in Kannada ("ನೀವು … ಬರ್ತೀರಾ?") | can flatten: through "will you go with me?" it became the informal "ನೀನು … ಬರ್ತೀಯಾ?" |
 
-The call agent picks the path itself (`route()` in `services/s2s/app/agent.py`).
+The call agent translates directly. With `S2S_PIVOT_THROUGH_ENGLISH=1` in its
+environment it goes through English instead, and one English step per sentence
+serves every listener language (`route()` in `services/s2s/app/agent.py`).
 
-Two things seen in testing: the Tamil output is often colloquial ("எப்படி
-இருக்கீங்க?", "இன்னிக்கு நாம … போறோம்"), and the model sometimes adds or
-changes small details ("Hello everyone" for "नमस्ते"). Judge it on your own
-language pairs.
+On a live Malayalam ↔ Kannada call, replayed (36 utterances that could be
+judged), indic-translate, direct, got 15 right, 14 partly right and 7 wrong, and
+made nothing up. sarvam-translate, the model it replaced, through English, got
+15 / 8 / 13, with 6 made-up outputs or commentary instead of a translation. The
+model card scores English ↔ Indian only; judge it on your own language pairs.
 
 ### 5.5 Tips
 
+- **End speech-recognition text like a sentence.** ASR output has no
+  punctuation, and without a sentence end the model often swaps names and
+  places: "നാളെ പാലക്കാട് പോകാം" came back in English as "let's go to new york
+  tomorrow", and with a trailing "." as "Let's go to Palakkad tomorrow." Into Hindi, Delhi,
+  Mumbai and Shimla showed up the same way. Add "।" for Assamese, Bengali, Bodo,
+  Dogri, Hindi, Maithili, Nepali, Odia, Punjabi and Sanskrit (`as bn brx doi hi
+  mai ne or pa sa`) and "." for the other languages, unless the text already
+  ends in `.`, `?`, `!`, `।` or `॥`. The call agent does this in
+  `TranslateClient.sentence` (`services/s2s/app/agent.py`).
+- **Respell words left in the source script.** About 5% of Indian → Indian
+  outputs keep a word, often a name, in the source script. Kannada "ನಾನು ನಾಳೆ
+  ಮೈಸೂರಿಗೆ ಹೋಗುತ್ತೇನೆ." came back in Malayalam as "ഞാൻ നാളെ മൈസൂರಿಗೆ
+  പോകുന്നു." Unicode lays out the Brahmic scripts (Devanagari to Malayalam)
+  letter for letter at the same offsets, so the call agent respells those
+  letters in the target script (`TranslateClient.respell`); here it gives
+  "മൈസൂരിഗെ".
 - **Send sentences or short paragraphs.** The server runs with a 4,096-token
-  window (prompt + output), although the model handles 8k. Raise
+  window (prompt + output), although the model is validated up to 32,768. Raise
   `--max-model-len` in `docker-compose.yml` for longer documents.
-- **Don't name the source language** in the text.
+- **Don't name the source language** in the text, and don't add a system
+  message.
 - **Translation is greedy**, so the same input gives the same output.
 - **`GET /v1/metrics`** exposes vLLM's Prometheus metrics (queue length, KV-cache
   use, token counts).
@@ -450,7 +488,7 @@ You only talk to the TTS service.
 | `stream` | `false` | `true`: chunked response while generating |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | 0.6, 0.9, 50, 1.2 | sampling (the model card's production settings) |
 | `seed` | random | fixes sampling so the same text and seed sound identical |
-| `max_seconds` | auto | cap per sentence chunk (≤ 60). Default ≈ 2.5 × the expected duration, ≤ 30 s |
+| `max_seconds` | auto | cap per sentence chunk (≤ 60). Default: characters ÷ 9 + 1.2 s, ≤ 30 s (no normal clip we measured spoke slower; `TTS_MIN_CHARS_PER_S` changes the 9) |
 
 ```bash
 curl -s localhost:8003/v1/tts -H 'content-type: application/json' -d '{"text": "வணக்கம், எப்படி இருக்கிறீர்கள்?", "language": "ta", "gender": "male"}' -o hello.wav
@@ -572,8 +610,9 @@ right when the previous one ends, so playback is gapless.
 
 The shortest end-to-end path, file in and file out
 ([`examples/speech_to_speech.py`](examples/speech_to_speech.py)): the file
-through ASR in pieces of at most 15 s, the text split into sentences, each
-translated (through English when both languages are Indian), then each spoken.
+through ASR in pieces of at most 15 s, the text split into sentences, each given
+an end mark (`end_sentence`) and translated straight into the target language,
+then each spoken.
 
 ```bash
 python docs/examples/speech_to_speech.py hindi.wav --from hi --to te --out telugu.wav
@@ -581,34 +620,36 @@ python docs/examples/speech_to_speech.py hindi.wav --from hi --to te --out telug
 
 ```
 नमस्ते आज हम गणित की कक्षा सुरू करेंगे कृपया अपनी पुस्तके खोलिए और पहला पाठ पढ़िय
-  -> హలో అందరికీ, ఈ రోజు మనం మన గణితం క్లాస్ ప్రారంభిద్దాం. దయచేసి మీ పుస్తకాలు తెరిచి మొదటి పాఠం చదవండి.
+  -> నమస్తే, ఈ రోజు మనం గణిత తరగతిని ప్రారంభిద్దాం. దయచేసి మీ పుస్తకాలు తెరిచి మొదటి పాఠం చదవండి.
 
-ASR 23 ms, translate 728 ms, TTS 7483 ms -> telugu.wav (9.1 s)
+ASR 21 ms, translate 526 ms, TTS 7126 ms -> telugu.wav (8.7 s)
 ```
 
-The ASR output has no punctuation, so the sentence split finds one sentence here.
+The ASR output has no punctuation, so the sentence split finds one sentence here,
+and `end_sentence` adds a "।" before it goes to translate.
 
 For live audio, wire them together per utterance:
 
 1. Cut the mic audio into utterances of at most 15 s with a VAD
    ([4.2](#42-live-audio)) and send each finished one to ASR.
-2. Send the transcript to translate with `stream: true` (twice, through English,
-   when both languages are Indian). You can show the streamed `delta.content`
-   pieces as captions.
-3. When the stream ends (`data: [DONE]`), send the full translation to that
-   listener's TTS socket as a `synthesize` request; it is queued behind anything
-   still playing.
+2. End the transcript with "।" or "." ([5.5](#55-tips)) and send it to translate
+   with `stream: true`, one call straight into the listener's language. You can
+   show the streamed `delta.content` pieces as captions. Respell any word left in
+   the source script ([5.5](#55-tips)).
+3. When the stream ends (`data: [DONE]`), send the full translation to TTS as a
+   `synthesize` request, once per language even if several listeners hear it, and
+   copy the audio to each of them. Each listener plays utterances in order.
 4. Play TTS binary frames as they arrive.
 5. Optionally, when the VAD hears the listener start talking, send TTS
    `{"type": "cancel"}` to stop playback (barge-in).
 
-`services/s2s/app/agent.py` does this for two-way calls. Measured in the
-two-caller test, the listener hears the translation 1.33 s (Hindi → English) and
-1.83 s (Hindi → Tamil, two translation calls) after the speaker stops; for
-Tamil → Hindi, speech starts playing at 1.19 s. For Hindi → Tamil, the final
-transcript came at 0.50 s (the VAD pause), the translation was done at 1.19 s and
-speech started at 1.58 s. In the browser test, the translation was heard after
-1.1–1.6 s.
+`services/s2s/app/agent.py` does this for calls of any size. In the two-caller test
+with indic-translate (direct), the listener heard the translation 1.39 s (Hindi →
+English) and 1.59 s (Hindi → Tamil) after the speaker stopped; for Tamil → Hindi,
+speech started playing at 1.05–1.10 s. For Hindi → Tamil, the final transcript came at
+0.52 s (the VAD pause), the translation was done at 0.96 s and speech started at
+1.35 s. In a three-person call every listener heard theirs within 1.55–1.88 s. With
+sarvam-translate through English the same turns took 1.33 s and 1.83 s.
 
 ---
 
@@ -640,8 +681,9 @@ the connection stays usable.
 | ASR returns 500, then every ASR request fails for a minute | a request over 16 s; cut audio at pauses ([4.1](#41-transcribe--post-v1audiotranscriptions)) |
 | ASR returns 404 | a plain or unknown language code; use `ml-IN`, `hi-IN`, `kn-IN`, `te-IN` or `ta-IN` |
 | First word of utterances missing in calls | echo cancellation turning down speech that overlaps playback; the agent applies it only while playout leaks into the mic ([4.2](#42-live-audio)) |
-| Translation in the wrong language | the system message names the wrong target, or names the source too; use the exact name from [3](#3-languages) |
-| Indian → Indian translation odd or flattened | expected through English; it is two calls by design |
+| Translation in the wrong language | the prompt names the wrong target or names the source too, or has a system message; use the format in [5.1](#51-the-request-format) and the exact name from [3](#3-languages) |
+| Names or places swapped (Palakkad → New York) | the text has no sentence end; add "।" or "." ([5.5](#55-tips)) |
+| A word in the translation is in another script | the model kept a source word; respell it ([5.5](#55-tips)) |
 | Translation cut off | `finish_reason: "length"`: raise `max_tokens` or split the text |
 | TTS audio has gaps when many play at once | more than ~6–8 concurrent voices; see capacity below |
 | TTS voice sounds generic | `speaker` name not in `/v1/voices` |
@@ -659,14 +701,14 @@ Measured on one NVIDIA L40S running all of them together:
 | Service | Single request | Under load |
 |---|---|---|
 | ASR | 6.5 s utterance in ~25 ms | 4 / 8 / 16 concurrent: p50 61 / 105 / 194 ms; ~43 utterances/s (the Whisper NIM managed 2.6) |
-| Translate (into English, one call) | first text 25 ms, sentence 0.20 s | 32 concurrent: sentence 0.24 s, 109 sentences/s; 64: 0.34 s, 143 sentences/s |
+| Translate (Indian → Indian, direct, 10–15-word sentences) | first text 45 ms, sentence 0.37 s | 8 concurrent: sentence 0.26 s, 19.5 sentences/s; 32: 0.32 s, 67.6 sentences/s; 64: 0.43 s, 104 sentences/s |
 | TTS | first audio 0.38 s, RTF 0.84 | 4 voices: first audio 0.42 s, RTF 0.96, no stalls; 8 voices: RTF 1.05, stalls up to 0.4 s |
 
 **TTS sets the capacity:** about 6–7 simultaneous real-time voices. ASR (~43
 utterances per second) and translation have large headroom.
 
-GPU memory (46 GB L40S): ASR NIM (five languages) 11.8 GB, translate NIM 11.2 GB,
-`tts-lm` NIM 12.4 GB, TTS decoder 0.9 GB: 36.3 GB in all.
+GPU memory (46 GB L40S): translate NIM 16.9 GB, ASR NIM (five languages) 10.2 GB,
+`tts-lm` NIM 12.4 GB, TTS decoder 0.9 GB: 40.3 GB in all.
 
 Re-run the benchmarks with `clients/asr_client.py --language hi-IN --bench`,
 `clients/translate_client.py --bench` and `clients/tts_stream.py --bench` (see the
@@ -683,9 +725,11 @@ through.
 | ASR | `NIM_DISABLE_MODEL_DOWNLOAD` | `true` | serve the custom models instead of downloading the image's own (Whisper) |
 | ASR | `NIM_EXPORT_PATH` | `/opt/nim/export` (`./nim-export/asr-indic`) | where the NIM finds `custom_model.tar.gz`, built by `services/asr-nim/build/build.sh` |
 | ASR | `ASR_WARM_LANGUAGES` | `ml-IN hi-IN kn-IN te-IN ta-IN` | models the healthcheck warms before reporting healthy |
-| Translate | `--kv-cache-memory-bytes` | `4294967296` | KV cache (4 GiB, 18,507 tokens). The NIM's vLLM reserves too little at a GPU share, so it is pinned |
+| Translate | `--kv-cache-memory-bytes` | `3221225472` | KV cache (3 GiB, 24,111 tokens). The NIM's vLLM reserves too little at a GPU share, so it is pinned |
 | Translate | `--max-model-len` | `4096` | prompt + output tokens per request |
 | Translate | `--max-num-seqs` | `64` | concurrent sequences |
+| Translate | `--max-num-batched-tokens` | `1024` | prefill chunk size. Live requests are short, and the activation peak (logits over a 262k-token vocabulary) is what fills the memory budget |
+| Translate | `--enable-prefix-caching`, `--language-model-only`, `--trust-remote-code` | set | prefix caching reuses the KV cache of repeated prompt prefixes; `--language-model-only` loads only the text model, not the vision and audio towers |
 | `tts-lm` | `--kv-cache-memory-bytes` | `5368709120` | KV cache (5 GiB, 46,800 tokens) |
 | `tts-lm` | `--max-model-len` | `4096` | must match `MAX_MODEL_LEN` of the TTS service |
 | `tts-lm` | `--max-num-seqs` | `32` | concurrent voices |
@@ -696,6 +740,7 @@ through.
 | Call agent | `S2S_ASR_PARTIALS` | `1` | live captions of the speaker's words (re-transcribes the utterance so far) |
 | Call agent | `S2S_ASR_PARTIAL_INTERVAL_S` | `0.5` | how often captions are refreshed |
 | Call agent | `S2S_VAD_MIN_SILENCE_MS` | `500` | pause that ends an utterance |
+| Call agent | `S2S_PIVOT_THROUGH_ENGLISH` | `0` | `1`: between two Indian languages, translate through English (two calls; the English step is shared by every listener language) |
 | all | `BIND_ADDR` | `127.0.0.1` | host address the ports bind to |
 | LLM NIMs | `LOCAL_NIM_CACHE` | `./nim-cache` | where the translate and `tts-lm` NIMs keep compile caches (`<dir>/translate`, `<dir>/tts-lm`; writable by uid 1000) |
 
@@ -706,14 +751,14 @@ through.
   NGC key, and production use needs an NVIDIA AI Enterprise licence. The ASR NIM
   container is governed by the NVIDIA AI Product Agreement.
 - **IndicConformer** checkpoints are MIT licensed (AI4Bharat's model cards).
-- **Sarvam-Translate** is licensed GPL-3.0.
-- **indic-speak** is under the **Indic Open Model License v1.0** (Bodhan AI /
-  AI4Bharat):
-  - Self-hosting it for your own product is free, with attribution ("Built
+- **indic-translate** and **indic-speak** are under the **Indic Open Model
+  License v1.0** (Bodhan AI / AI4Bharat):
+  - Self-hosting them for your own product is free, with attribution ("Built
     with … from Bodhan AI / AI4Bharat").
-  - Exposing it as an API that **other companies call directly** needs Bodhan
+  - Exposing them as an API that **other companies call directly** needs Bodhan
     AI's written approval, unless you are a nonprofit, government or academic
     user.
   - The license forbids robocalls, voice phishing, and voice clones or deepfakes
     of real people without consent.
-- indic-speak also uses Llama 3.2 and SNAC, whose licenses apply.
+- indic-translate is built on Gemma 4 E4B, and indic-speak uses Llama 3.2 and
+  SNAC; their licenses apply too.

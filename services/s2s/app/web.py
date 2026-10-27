@@ -24,6 +24,9 @@ from .languages import HEAR, SPEAK, describe
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 LIVEKIT_HTTP = os.environ.get("LIVEKIT_URL", "http://127.0.0.1:7880").replace("ws", "http", 1)
+# The translator joins only rooms that request it by this name (in the callers' tokens), so the
+# LiveKit server can be shared with other apps (meetmind's).
+AGENT_NAME = os.environ.get("S2S_AGENT_NAME", "indic-s2s")
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("s2s.web")
 
@@ -51,11 +54,14 @@ async def translator_watchdog():
                 humans = [p for p in ps if p.kind != agent_kind]
                 if not humans or any(p.kind == agent_kind for p in ps):
                     continue
+                # only this app's rooms: they asked for the translator when they were created
+                if not any(d.agent_name == AGENT_NAME for d in await lk.agent_dispatch.list_dispatch(r.name)):
+                    continue
                 seen.add(r.name)
                 now = time.time()
                 first = missing_since.setdefault(r.name, now)
                 if now - first >= MISSING_GRACE_S and now - dispatched_at.get(r.name, 0) >= REDISPATCH_AFTER_S:
-                    await lk.agent_dispatch.create_dispatch(api.CreateAgentDispatchRequest(agent_name="", room=r.name))
+                    await lk.agent_dispatch.create_dispatch(api.CreateAgentDispatchRequest(agent_name=AGENT_NAME, room=r.name))
                     dispatched_at[r.name] = now
                     log.warning("room %s had no translator for %.0fs; dispatched one", r.name, now - first)
             for name in list(missing_since):
@@ -103,6 +109,7 @@ async def token(req: JoinRequest):
            .with_ttl(timedelta(hours=4))
            .with_grants(api.VideoGrants(room_join=True, room=room, can_publish=True, can_subscribe=True,
                                         can_publish_data=True, can_update_own_metadata=True))
+           .with_room_config(api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME)]))
            .to_jwt())
     return {"token": jwt, "identity": identity, "room": room}
 

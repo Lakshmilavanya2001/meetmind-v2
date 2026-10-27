@@ -8,7 +8,7 @@
 #
 # The models run in NVIDIA NIM containers wherever NVIDIA supports them:
 #   asr       AI4Bharat IndicConformer (5 languages) on NVIDIA's Riva ASR NIM
-#   translate sarvam-translate, model-free LLM NIM (OpenAI API)
+#   translate indic-translate, model-free LLM NIM (OpenAI API)
 #   tts-lm    indic-speak's speech LM, model-free LLM NIM (OpenAI completions, token ids)
 #   tts       indic-speak's audio decoder (SNAC + Vocos) and streaming API: our own image,
 #             since no NIM turns audio tokens into sound
@@ -63,28 +63,30 @@ services:
       timeout: 60s                      # the first check sends the warm-up requests
       test: ["CMD", "python3", "/opt/healthcheck.py"]
 
-  # sarvamai/sarvam-translate (Gemma 3 4B, 22 Indian languages + English) on NVIDIA's
-  # model-free LLM NIM, serving the local checkpoint. OpenAI API: POST /v1/chat/completions.
+  # bodhan-ai/indic-translate (Gemma-4-E4B, 22 Indian languages + English, direct between
+  # any two) on NVIDIA's model-free LLM NIM, serving the local checkpoint unchanged.
+  # OpenAI API: POST /v1/chat/completions, with the model's prompt contract.
   translate:
     image: nvcr.io/nim/nvidia/model-free-nim:2.0.13
     restart: unless-stopped
     ports: ["${BIND_ADDR:-127.0.0.1}:8002:8000"]
     shm_size: 2g
     volumes:
-      - ./models/sarvam-translate:/models/sarvam-translate:ro
+      - ./models/indic-translate:/models/indic-translate:ro
       - ${LOCAL_NIM_CACHE:-./nim-cache}/translate:/opt/nim/.cache
       - ./services/translate-nim/healthcheck.py:/opt/healthcheck.py:ro
     environment:
-      NIM_MODEL_PATH: /models/sarvam-translate
-      NIM_SERVED_MODEL_NAME: sarvam-translate
+      NIM_MODEL_PATH: /models/indic-translate
+      NIM_SERVED_MODEL_NAME: indic-translate
     command:                            # vLLM engine flags, passed straight through
       - --dtype
       - bfloat16
       - --max-model-len
       - "4096"
-      # The NIM's vLLM 0.28 reserves too little KV cache at a GPU share, so pin its size
+      # The NIM's vLLM 0.28 reserves too little KV cache at a GPU share, so pin its size.
+      # 3 GiB keeps the model next to ASR and TTS on one 46 GB GPU.
       - --kv-cache-memory-bytes
-      - "4294967296"                    # 4 GiB
+      - "3221225472"                    # 3 GiB
       - --max-num-seqs
       - "64"
       # small prefill chunks: live requests are short, and the activation peak
@@ -92,7 +94,8 @@ services:
       - --max-num-batched-tokens
       - "1024"
       - --enable-prefix-caching
-      - --language-model-only           # text in, text out: skip the vision tower
+      - --language-model-only           # text in, text out: skip the vision/audio towers
+      - --trust-remote-code
     deploy: {resources: {reservations: {devices: [*gpu]}}}
     depends_on: {asr: {condition: service_healthy}}
     healthcheck:
@@ -177,7 +180,10 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       ASR_URL: http://127.0.0.1:8001            # ASR NIM (Riva), HTTP
       TRANSLATE_URL: http://127.0.0.1:8002/v1    # OpenAI-compatible (the NIM)
-      TRANSLATE_MODEL: sarvam-translate
+      TRANSLATE_MODEL: indic-translate
+      # Between two Indian languages: 0 = direct (one call), 1 = through English (two calls,
+      # the English step shared by every listener language, as with sarvam-translate)
+      S2S_PIVOT_THROUGH_ENGLISH: ${S2S_PIVOT_THROUGH_ENGLISH:-0}
       TTS_URL: ws://127.0.0.1:8003/v1/stream
       # Live captions of the speaker's words while they talk: re-transcribe the utterance so
       # far every half second (~25 ms per request on the ASR NIM).

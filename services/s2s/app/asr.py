@@ -25,6 +25,7 @@ import wave
 import aiohttp
 import numpy as np
 
+from .languages import ASR_CODE
 from .vad import SR, Segmenter, SegmenterConfig, SileroVAD
 
 log = logging.getLogger("s2s.asr")
@@ -57,7 +58,7 @@ async def transcribe(http: aiohttp.ClientSession, audio: np.ndarray, lang: str) 
     """One offline request: 16 kHz float32 audio -> (text, milliseconds taken)."""
     form = aiohttp.FormData()
     form.add_field("file", wav_bytes(audio), filename="utterance.wav", content_type="audio/wav")
-    form.add_field("language", f"{lang}-IN")        # Riva's language code for that model
+    form.add_field("language", ASR_CODE[lang])      # Riva's language code for that model
     t0 = time.perf_counter()
     async with http.post(f"{ASR_URL}/v1/audio/transcriptions", data=form) as r:
         if r.status != 200:
