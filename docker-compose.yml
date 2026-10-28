@@ -35,6 +35,11 @@ x-health: &health
   retries: 3
   start_period: 20m                     # first start downloads models from NGC
 
+# Container logs rotate (3 files of 20 MB per service) so they can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "3"}
+
 # The assistant's settings, shared by the web app (chat page, reminders) and the call agent ("Hey Mind").
 # All optional: without them that feature reports it isn't set up.
 x-assistant-env: &assistant-env
@@ -59,6 +64,8 @@ x-assistant-env: &assistant-env
   TWILIO_FROM: ${TWILIO_FROM:-}
   SMS_DEV_OUTBOX: ${SMS_DEV_OUTBOX:-false}
   SMS_ALLOWED_PREFIXES: ${SMS_ALLOWED_PREFIXES:-+91}
+  # Delete saved transcripts this many days after a meeting ends (empty: keep them)
+  TRANSCRIPT_RETENTION_DAYS: ${TRANSCRIPT_RETENTION_DAYS:-}
 
 services:
   # AI4Bharat IndicConformer (one 120M Conformer-CTC model per language: Malayalam, Hindi,
@@ -71,6 +78,7 @@ services:
   asr:
     image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
     restart: unless-stopped
+    logging: *logging
     ports:
       - "${BIND_ADDR:-127.0.0.1}:8001:9000"     # HTTP
       - "${BIND_ADDR:-127.0.0.1}:50051:50051"   # gRPC
@@ -96,6 +104,7 @@ services:
   translate:
     image: nvcr.io/nim/nvidia/model-free-nim:2.0.13
     restart: unless-stopped
+    logging: *logging
     ports: ["${BIND_ADDR:-127.0.0.1}:8002:8000"]
     shm_size: 2g
     volumes:
@@ -136,6 +145,7 @@ services:
   tts-lm:
     image: nvcr.io/nim/nvidia/model-free-nim:2.0.13
     restart: unless-stopped
+    logging: *logging
     ports: ["${BIND_ADDR:-127.0.0.1}:8004:8000"]
     shm_size: 2g
     volumes:
@@ -168,6 +178,7 @@ services:
     build: ./services/tts
     image: indic-tts-decoder:0.2
     restart: unless-stopped
+    logging: *logging
     ports: ["${BIND_ADDR:-127.0.0.1}:8003:8003"]
     volumes: ["./models:/models:ro"]    # tokenizer, Vocos and SNAC weights
     environment:
@@ -189,6 +200,7 @@ services:
   livekit:
     image: livekit/livekit-server:v1.13.9
     restart: unless-stopped
+    logging: *logging
     network_mode: host
     volumes: ["./services/livekit/livekit.yaml:/etc/livekit.yaml:ro"]
     environment:
@@ -199,6 +211,7 @@ services:
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    logging: *logging
     ports: ["127.0.0.1:${DB_PORT:-5434}:5432"]
     environment:
       POSTGRES_USER: meetmind
@@ -217,6 +230,7 @@ services:
     build: ./services/s2s
     image: indic-s2s:0.1
     restart: unless-stopped
+    logging: *logging
     network_mode: host
     command: ["python", "-m", "app.agent", "start"]
     environment:
@@ -251,6 +265,7 @@ services:
   s2s-web:
     image: indic-s2s:0.1
     restart: unless-stopped
+    logging: *logging
     network_mode: host
     command: ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8090"]
     environment:
@@ -267,6 +282,7 @@ services:
   proxy:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
+    logging: *logging
     network_mode: host
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST}

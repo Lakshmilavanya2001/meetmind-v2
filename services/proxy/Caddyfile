@@ -10,6 +10,16 @@
 # (docker-compose.host.yml sets them; the defaults are the original single-app ports).
 https://{$PUBLIC_HOST}:{$HTTPS_PORT:8443}, https://localhost:{$HTTPS_PORT:8443} {
 	tls internal
+	header {
+		# Pages: own scripts plus the LiveKit client (jsDelivr), Google Fonts, WebAssembly noise removal,
+		# microphone only; never framed by another site.
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+		-Server
+	}
 	@livekit path /rtc /rtc/* /twirp/*
 	reverse_proxy @livekit 127.0.0.1:{$LIVEKIT_PORT:7880}
 	reverse_proxy 127.0.0.1:{$WEB_PORT:8090}

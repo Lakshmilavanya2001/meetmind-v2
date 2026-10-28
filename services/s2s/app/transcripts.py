@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import search, summaries
+from . import maintenance, search, summaries
 from .accounts import Ctx, audit, current, get_db
 from .meetings import MODERATORS, load
 from .models import Meeting, MeetingSummary, SegmentTranslation, TranscriptSegment
@@ -62,9 +62,23 @@ async def set_saving(code: str, body: SaveIn, ctx: Ctx = Depends(current), s: As
     return {"saveTranscript": m.save_transcript}
 
 
+@router.delete("/api/meetings/{code}/transcript")
+async def delete_saved(code: str, ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
+    """The host or a co-host deletes everything saved from the meeting (lines, translations, summary, search)."""
+    m, me = await load(s, ctx, code)
+    if not me or me.role not in MODERATORS:
+        raise HTTPException(403, "Only the host or a co-host can delete the transcript.")
+    n = await maintenance.delete_transcript(s, m.id)
+    await audit(s, "transcript.delete", ctx.org.id, ctx.user.id, "Meeting", m.id, lines=n)
+    await s.commit()
+    return {"deleted": n}
+
+
 @router.get("/api/meetings/{code}/transcript")
 async def transcript(code: str, lang: str = "", ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
-    m = await _participant(s, ctx, code)
+    m, me = await load(s, ctx, code)
+    if me is None:
+        raise HTTPException(403, "Only the meeting's participants can see its transcript.")
     segs = await summaries.lines_for(s, m.id)
     tr = {}
     if lang and segs:
@@ -72,7 +86,7 @@ async def transcript(code: str, lang: str = "", ctx: Ctx = Depends(current), s: 
             SegmentTranslation.segment_id.in_([sg.id for sg in segs]), SegmentTranslation.language == lang))).scalars()}
     start = m.started_at or (segs[0].started_at if segs else None)
     return {"meeting": {"title": m.title, "joinCode": m.join_code, "status": m.status, "saveTranscript": m.save_transcript,
-                        "startedAt": m.started_at.isoformat() if m.started_at else None},
+                        "startedAt": m.started_at.isoformat() if m.started_at else None, "canDelete": me.role in MODERATORS},
             "segments": [{"id": sg.id, "speaker": sg.speaker_name, "language": sg.language, "text": sg.text,
                           "translation": tr.get(sg.id), "at": search._clock(start, sg.started_at) if start else None}
                          for sg in segs],

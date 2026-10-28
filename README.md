@@ -1,4 +1,71 @@
-# Indic speech call translator
+# MeetMind v2
+
+Translated meetings with an AI assistant. Everyone speaks their own language (English or Hindi
+for now) and hears the others translated, live. The app is built on the fast call translator this
+repo started from, plus MeetMind's accounts, meetings and agents, ported to Python.
+
+| | |
+|---|---|
+| **Calls** | live speech-to-speech translation (Parakeet → Qwen → Magpie), live captions, echo protection, noise removal (browser RNNoise or NVIDIA BNR "Studio") |
+| **Accounts** | organisations with join codes, sign-in sessions, meetings (start now, schedule, invite, end for all) |
+| **Transcripts** | saved only when the host turns it on; summaries with decisions and action items; questions answered with verified citations; retention and delete |
+| **Assistant** | chat page and "Hey Mind" in calls; agents for meetings, knowledge, food, cabs/Uber, tables, movies, reminders (SMS), and a planner; every change waits for Confirm |
+| **Missing compared with MeetMind** | video, screen sharing, in-call text chat, email invitations, Google/Outlook calendars |
+
+## Deploy (meetmind-v2)
+
+On a host that already runs MeetMind (this one, 10.79.254.169), v2 runs beside it on its own
+ports and its own LiveKit, and uses the same model servers:
+
+| What | Port |
+|---|---|
+| Pages and API (HTTPS, Caddy) | 8444 |
+| LiveKit signaling / TCP / UDP media | 7890 / 7891 / 50300–50500 |
+| Web app / call agent health (localhost) | 8091 / 8092 |
+| Postgres with pgvector (localhost) | 5434 |
+
+1. `cp .env.example .env` and fill it in. `COMPOSE_FILE=docker-compose.yml:docker-compose.host.yml`
+   selects this layout. Put the same LiveKit key and secret in `services/livekit/livekit.host.yaml`.
+2. `docker compose build s2s-agent` (the web app uses the same image), then `docker compose up -d`.
+   Migrations (`services/s2s/migrations/*.sql`) are applied when the web app starts.
+3. Check `https://<PUBLIC_HOST>:8444/health/ready`. It lists the database, LiveKit, the call agent
+   and each model server as `up` or `down` (HTTP 503 if a required one is down).
+4. Open `https://<PUBLIC_HOST>:8444`, create an account (the first one creates the organisation),
+   and share the join code from the dashboard.
+
+**Updating:** `git pull`, rebuild, and restart `s2s-agent` and `s2s-web`. A restart drops calls in
+progress, so first check that none are live:
+
+```bash
+docker compose exec -T db psql -U meetmind -d meetmind_v2 -tAc "SELECT count(*) FROM meetings WHERE status='LIVE'"
+```
+
+**Backups:** `scripts/backup-db.sh` writes `backups/meetmind_v2-<time>.dump` and keeps the newest 14.
+Restore instructions are in the script; a restore was tested on 2026-10-28. Run it daily from cron.
+
+**Hardening in place:**
+- security headers from the proxy: a content policy allowing only the app's scripts, the LiveKit
+  client and Google Fonts; no framing; microphone only;
+- log rotation (3 × 20 MB per container);
+- every 5 minutes, housekeeping deletes expired sessions, expires undecided confirmations and plans,
+  and deletes old read notifications;
+- `TRANSCRIPT_RETENTION_DAYS` deletes saved transcripts that many days after a meeting ends;
+- hosts can delete a meeting's transcript;
+- CI (`.github/workflows/ci.yml`) runs lint, the 127 tests against a throwaway Postgres, and the
+  page script checks on every push.
+
+**Not done:** a load test of concurrent calls (the model servers are shared with MeetMind, so a
+load test would slow its users); a fallback when a model server is down (captions still show
+without Magpie, but there's no speech); metrics beyond logs.
+
+---
+
+The rest of this README documents the call translator v2 grew from (`indicspeechLiveTranslate`),
+including its own model stack, then v2's features ([Accounts, organisations and meetings](#accounts-organisations-and-meetings)).
+Where it says "meetmind's LiveKit" or `docker-compose.shared.yml`, v2 now uses its own LiveKit and
+`docker-compose.host.yml` (above).
+
+## The call translator
 
 A real-time speech-to-speech call translator: everyone on a call speaks their own language
 and hears the others in the language they choose (tested with two and three people). A call
@@ -408,8 +475,8 @@ API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/me
   each citing the right line and time. Recognition slips carry through: "Pria will share…" was
   recognised without "Pria", so the summary credits the speaker.
 - Settings: `ASSISTANT_LLM_URL`/`ASSISTANT_LLM_MODEL` (summaries and answers), `EMBEDDING_BASE_URL`,
-  `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`; the agent gets `DATABASE_URL`. Not done yet: retention
-  (automatic deletion after N days) and deleting a transcript by hand.
+  `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`; the agent gets `DATABASE_URL`. Retention: `TRANSCRIPT_RETENTION_DAYS`
+  (phase 5); the host or a co-host can **Delete transcript** on the transcript page.
 
 **The assistant: agents and tools** (phase 4, 2026-10-28). A port of meetmind's agents to Python
 (`services/s2s/app/assistant/`). Page: **Assistant** (`/assistant`); in a call, say **"Hey Mind …"**.
@@ -478,7 +545,7 @@ event per line: `conversation`, `handoff`, `tool_start`, `tool_end`, `confirmati
 `GET /api/bookings`, `POST /api/bookings/<id>/cancel`, `/api/rides[/<id>[/cancel|advance]]`, `/api/reminders`, `/api/notifications`,
 `/api/profile/phone|sms`, `/api/integrations/uber/*`.
 
-**Tests.** Unit and API tests (`services/s2s/tests`, against the `meetmind_v2_test` database):
+**Tests.** 127 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
 
 ```bash
 docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmind:<DB_PASSWORD>@127.0.0.1:5434/meetmind_v2_test \
@@ -839,7 +906,20 @@ which is why the healthcheck sends one before reporting healthy.
 
 ## Operations
 
-**Now (shared models):**
+**meetmind-v2 on this host:**
+
+- Services: `livekit` (its own, 7890), `db`, `s2s-agent`, `s2s-web`, `proxy`. Logs:
+  `docker compose logs -f s2s-web` (assistant, reminders, housekeeping) or `s2s-agent` (calls, Hey Mind).
+- Health: `/health` (the web app is up) and `/health/ready` (everything it needs, up or down).
+- Model servers are shared with MeetMind: Parakeet (ASR), Qwen (translation, assistant), Magpie (speech),
+  the embedding model and BNR. If Magpie is down, calls still show translated captions but nobody
+  hears speech, and Hey Mind's answers are text only.
+- Restarting `s2s-agent` drops calls in progress (the watchdog puts a translator back in rooms that
+  lose one); restarting `s2s-web` only interrupts page loads and assistant replies in progress.
+- Database: `scripts/backup-db.sh` (see [Deploy](#deploy-meetmind-v2)); data is in the `db` volume.
+- Uber fare quotes and in-memory rate limits live in each process: run one web process.
+
+**The translator's original setup (shared models):**
 
 - This repo runs `s2s-agent`, `s2s-web` and `proxy`, which need no GPU. Logs: `docker compose logs -f s2s-agent`.
 - The model servers belong to meetmind: `meetmind/deploy/gpu-host` (`asr` Parakeet, `nmt`

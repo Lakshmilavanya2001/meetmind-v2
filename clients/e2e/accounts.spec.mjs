@@ -7,7 +7,7 @@ const newPage = async (b) => (await b.newContext({ ignoreHTTPSErrors: true, base
 
 test("meetmind-v2: sign up, organisation, start and join a meeting, end for all", async () => {
   const [ba, bb] = await Promise.all([launch(), launch()]);
-  const tag = Date.now().toString(36);
+  const tag = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   try {
     const a = await newPage(ba);
     await a.goto("/");

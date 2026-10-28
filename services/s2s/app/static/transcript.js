@@ -24,6 +24,7 @@ async function load() {
   $("meta").textContent = [d.meeting.status.toLowerCase(), d.meeting.startedAt && new Date(d.meeting.startedAt).toLocaleString(),
     d.meeting.saveTranscript ? "transcript being saved" : null].filter(Boolean).join(" · ");
   renderSummary(d.summary);
+  $("delete").hidden = !(d.meeting.canDelete && (d.segments.length || d.summary));
   const lines = $("lines");
   if (!d.segments.length) {
     lines.replaceChildren(el("li", { class: "meta", text: "Nothing saved. The host turns on “Save transcript” in the call." }));
@@ -34,6 +35,12 @@ async function load() {
     el("span", { text: $("lang").value && s.translation ? s.translation : s.text }))));
 }
 
+$("delete").addEventListener("click", async () => {
+  if (!confirm("Delete this meeting's saved transcript, translations and summary for everyone? This can't be undone.")) return;
+  $("delete").disabled = true;
+  try { await api(`/api/meetings/${code}/transcript`, undefined, "DELETE"); await load(); } catch (e) { fail(e); }
+  finally { $("delete").disabled = false; }
+});
 $("lang").addEventListener("change", () => load().catch(fail));
 $("summarise").addEventListener("click", async () => {
   $("summarise").disabled = true;

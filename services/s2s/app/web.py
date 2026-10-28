@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from livekit import api
 from pydantic import BaseModel, Field
 
-from . import bnr, db
+from . import bnr, db, maintenance, readiness
 from .accounts import router as accounts_router
 from .languages import HEAR, SPEAK, describe
 from .meetings import end_abandoned
@@ -45,6 +45,9 @@ LIVEKIT_HTTP = os.environ.get("LIVEKIT_URL", "http://127.0.0.1:7880").replace("w
 AGENT_NAME = os.environ.get("S2S_AGENT_NAME", "indic-s2s")
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("s2s.web")
+# The app's own messages (housekeeping, reminders sent, meetings ended, assistant errors) next to uvicorn's.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(levelname)s:%(name)s: %(message)s")
 
 @contextlib.asynccontextmanager
 async def lifespan(_app):
@@ -72,7 +75,8 @@ ALLOW_ANONYMOUS_ROOMS = os.environ.get("ALLOW_ANONYMOUS_ROOMS", "0") == "1"
 # restarts or crashes mid-call, the room is left without one; this puts it back.
 WATCHDOG_EVERY_S = 5
 MISSING_GRACE_S = 8          # covers the normal join delay of a new room's translator
-REDISPATCH_AFTER_S = 30      # give a dispatched translator time to join before retrying
+REDISPATCH_AFTER_S = 30
+HOUSEKEEPING_EVERY_S = 300   # expired sessions and confirmations, transcript retention      # give a dispatched translator time to join before retrying
 
 
 async def translator_watchdog():
@@ -80,6 +84,7 @@ async def translator_watchdog():
     dispatched_at: dict[str, float] = {}
     lk = api.LiveKitAPI(LIVEKIT_HTTP, API_KEY, API_SECRET)
     agent_kind = 4           # ParticipantInfo.Kind.AGENT
+    last_housekeeping = 0.0
     while True:
         await asyncio.sleep(WATCHDOG_EVERY_S)
         try:
@@ -125,6 +130,13 @@ async def translator_watchdog():
                         log.info("sent %d reminder(s)", n)
             except Exception as e:  # noqa: BLE001
                 log.warning("reminders: %s", e)
+            if time.time() - last_housekeeping >= HOUSEKEEPING_EVERY_S:
+                last_housekeeping = time.time()
+                try:
+                    async with db.sessionmaker()() as s:
+                        await maintenance.run(s)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("housekeeping: %s", e)
 
 
 class JoinRequest(BaseModel):
@@ -173,6 +185,14 @@ async def token(req: JoinRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def ready():
+    """Database, LiveKit, the call agent and the model servers: up or down (503 if a required one is down)."""
+    from fastapi.responses import JSONResponse
+    r = await readiness.check()
+    return JSONResponse(r, status_code=200 if r["status"] == "ok" else 503)
 
 
 # Pages. The call page is the same for every meeting (/m/<code>); the rest need a session cookie

@@ -9,3 +9,4 @@ __pycache__/
 /build/
 # local certificate exports
 caddy-root.crt
+backups/

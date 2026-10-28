@@ -36,6 +36,10 @@ services:
     environment:
       PUBLIC_URL: https://${PUBLIC_HOST}:8444
       LIVEKIT_URL: http://127.0.0.1:7890
+      # only for /health/ready (are the call agent and the speech models reachable?)
+      S2S_HEALTH_PORT: "8092"
+      ASR_URL: ${ASR_URL}
+      MAGPIE_TTS_URL: ${MAGPIE_TTS_URL}
       S2S_SPEAK_LANGUAGES: en,hi
       S2S_HEAR_LANGUAGES: en,hi
 

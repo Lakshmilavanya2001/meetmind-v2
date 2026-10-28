@@ -9,7 +9,7 @@ import pytest
 from conftest import other, signup
 from sqlalchemy import select, update
 
-from app import db, embeddings, search, summaries, transcripts
+from app import db, embeddings, search, transcripts
 from app.assistant import llm
 from app.models import Meeting, MeetingSummary, TranscriptSegment
 from app.transcript_store import RoomTranscript

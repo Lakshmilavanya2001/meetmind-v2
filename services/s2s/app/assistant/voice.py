@@ -23,8 +23,9 @@ from .tools import load
 from .tools.base import ToolError
 
 log = logging.getLogger("s2s.assistant")
-YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok(ay)?|go ahead|confirm(ed)?|do it|please do|correct|right|haan?|ha|हाँ|हां|जी हाँ|जी|ठीक है|कर दो|कीजिए)\b", re.I)
-NO = re.compile(r"^\W*(no|nope|nah|cancel|don'?t|do not|stop|never ?mind|nahi|nahin|नहीं|मत|रहने दो|रद्द)\b", re.I)
+YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok(ay)?|go ahead|confirm(ed)?|do it|please do|correct|right|haan?|ha|हाँ|हां|जी हाँ|जी|ठीक है|कर दो|कीजिए)(?!\w)", re.I)
+# (?!\w), not \b: a Devanagari word can end in a vowel sign (हाँ, नहीं), where \b never matches.
+NO = re.compile(r"^\W*(no|nope|nah|cancel|don'?t|do not|stop|never ?mind|nahi|nahin|नहीं|मत|रहने दो|रद्द)(?!\w)", re.I)
 SAY_YES = {"en": "Say yes to go ahead, or no to cancel.", "hi": "आगे बढ़ने के लिए हाँ कहें, या रद्द करने के लिए ना।"}
 
 

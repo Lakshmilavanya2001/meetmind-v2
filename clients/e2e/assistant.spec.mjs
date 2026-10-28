@@ -6,7 +6,7 @@ const BASE = process.env.BASE_URL || "https://10.79.254.169:8444";
 // the conversation is listed and reopens with its confirmed card.
 test("meetmind-v2: assistant schedules a meeting only after Confirm", async () => {
   const browser = await chromium.launch();
-  const tag = Date.now().toString(36);
+  const tag = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   try {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, baseURL: BASE });
     const a = await ctx.newPage();

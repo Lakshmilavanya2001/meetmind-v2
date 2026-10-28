@@ -1,0 +1,43 @@
+# Every push and pull request: lint, the unit/API tests against a throwaway Postgres (pgvector),
+# and a syntax check of the pages' scripts. No model servers are needed (the tests stand in for them).
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: meetmind
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: meetmind_v2_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U meetmind" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: services/s2s
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://meetmind:ci-only-password@127.0.0.1:5432/meetmind_v2_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/s2s/requirements*.txt
+      - name: Install
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt pyflakes==3.4.0
+          pip install --no-deps silero-vad==6.2.3
+      - name: Lint
+        run: python -m pyflakes app tests
+      - name: Tests
+        run: python -m pytest -q -p no:warnings tests
+      - name: Page scripts
+        run: for f in app/static/*.js; do node --check "$f"; done
