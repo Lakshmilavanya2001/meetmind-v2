@@ -20,11 +20,6 @@ import call_test
 from call_test import Caller, read_wav
 
 
-def token(api, name, room, speak, hear, voice, noise):
-    body = json.dumps({"name": name, "room": room, "speak": speak, "hear": hear, "voice": voice, "noise": noise}).encode()
-    return json.load(urllib.request.urlopen(urllib.request.Request(f"{api}/api/token", body, {"content-type": "application/json"})))
-
-
 def clip(sample: str):
     """noise alone (5 s) + speech in noise + noise alone (5 s), 16 kHz int16."""
     speech, sr = read_wav(f"/td/{sample}.wav")
@@ -40,7 +35,9 @@ def clip(sample: str):
 
 async def run(url, api, sample, mode):
     room = f"noise-{mode}-{int(time.time())}"
-    call_test.token = lambda api_, name, room_, speak, hear, voice: token(api_, name, room_, speak, hear, voice, mode if name == "Asha" else "standard")
+    real = call_test.__dict__.get("_real_token") or call_test.token
+    call_test._real_token = real
+    call_test.token = lambda api_, name, room_, speak, hear, voice: real(api_, name, room_, speak, hear, voice, mode if name == "Asha" else "standard")
     a, b = Caller("Asha", "en", "en", "female"), Caller("Ben", "hi", "hi", "male")
     await a.join(url, api, room)
     await b.join(url, api, room)

@@ -23,6 +23,7 @@ const state = {
   sameLangNotice: "",
   testMic: null,          // pre-join microphone check
   studio: false,          // server noise removal (NVIDIA BNR) available
+  meeting: null,          // meeting mode (/m/<code>): {code, title, myRole}; null on the open demo page
   noiseChain: Promise.resolve(),
 };
 
@@ -226,8 +227,11 @@ async function join(ev) {
   stopMicTest();
   try {
     levelCtx();                                   // created inside the click: allowed to run
-    const r = await fetch("/api/token", { method: "POST", headers: { "content-type": "application/json" },
-                                          body: JSON.stringify(req) });
+    const r = state.meeting
+      ? await fetch(`/api/meetings/${state.meeting.code}/join`, { method: "POST", headers: { "content-type": "application/json" },
+                                                                body: JSON.stringify({ speak: req.speak, hear: req.hear, voice: req.voice, noise: req.noise }) })
+      : await fetch("/api/token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(req) });
+    if (r.status === 401) { location.assign(`/login?next=${encodeURIComponent(location.pathname)}`); return; }
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
     const { token, identity, room: roomName } = await r.json();
     state.me = { identity, name: req.name, speak: req.speak, hear: req.hear, voice: req.voice, noise: req.noise };
@@ -242,8 +246,9 @@ async function join(ev) {
     await room.startAudio();
     watchMyMic();
 
-    history.replaceState(null, "", `?room=${encodeURIComponent(roomName)}`);
-    $("room-name").textContent = roomName;
+    if (!state.meeting) history.replaceState(null, "", `?room=${encodeURIComponent(roomName)}`);
+    $("room-name").textContent = state.meeting ? state.meeting.title : roomName;
+    $("end-all").hidden = !(state.meeting && ["HOST", "COHOST"].includes(state.meeting.myRole));
     syncSettingsForm();
     $("join").hidden = true;
     $("call").hidden = false;
@@ -270,10 +275,11 @@ function watchMyMic() {
   });
 }
 
-async function leave() {
+async function leave(note) {
   if ($("settings").open) $("settings").close();
-  if (state.room) await state.room.disconnect();
-  state.room = null;
+  const room = state.room;
+  state.room = null;                      // our own leave isn't a drop
+  if (room) await room.disconnect();
   for (const key of [...levels.taps.keys()]) unwatchLevel(key);
   state.utts.clear();
   state.playQueue = [];
@@ -287,6 +293,7 @@ async function leave() {
   document.querySelectorAll("audio[data-lk]").forEach((a) => a.remove());
   $("call").hidden = true;
   $("join").hidden = false;
+  if (state.meeting) location.assign(note === "ended" ? "/dashboard?ended=1" : "/dashboard");
 }
 
 // ------------------------------------------------------------------ room
@@ -301,7 +308,14 @@ function wireRoom(room) {
       toast("Connection lost, reconnecting...", { key: "conn", timeout: 0 });
     })
     .on(RoomEvent.Reconnected, () => { $("conn-dot").classList.add("on"); toast("Reconnected.", { key: "conn" }); })
-    .on(RoomEvent.Disconnected, () => $("conn-dot").classList.remove("on"))
+    .on(RoomEvent.Disconnected, async () => {
+      $("conn-dot").classList.remove("on");
+      // Dropped without leaving: if the host ended the meeting, say so and leave (not a dead call screen).
+      if (!state.meeting || state.room !== room) return;
+      const r = await fetch(`/api/meetings/${state.meeting.code}`).catch(() => null);
+      const status = r?.ok ? (await r.json()).meeting.status : null;
+      if (status === "ENDED" || status === "CANCELLED") await leave("ended");
+    })
     .on(RoomEvent.ParticipantConnected, (p) => {
       if (isAgent(p)) return updateTranslatorChip();
       toast(`${p.name || p.identity} joined.`);
@@ -696,10 +710,10 @@ function rnnoiseProcessor() {
   const proc = {
     name: "rnnoise",
     async init({ track }) {
-      const lib = await import("./noise/web-noise-suppressor.js");
-      rnnoiseWasm ??= lib.loadRnnoise({ url: "noise/rnnoise.wasm", simdUrl: "noise/rnnoise_simd.wasm" });
+      const lib = await import("/noise/web-noise-suppressor.js");
+      rnnoiseWasm ??= lib.loadRnnoise({ url: "/noise/rnnoise.wasm", simdUrl: "/noise/rnnoise_simd.wasm" });
       ctx = new AudioContext({ sampleRate: 48000 });
-      await ctx.audioWorklet.addModule("noise/rnnoiseWorklet.js");
+      await ctx.audioWorklet.addModule("/noise/rnnoiseWorklet.js");
       node = new lib.RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary: await rnnoiseWasm });
       source = ctx.createMediaStreamSource(new MediaStream([track]));
       const dest = ctx.createMediaStreamDestination();
@@ -748,7 +762,7 @@ async function changeNoise() {
 
 // ------------------------------------------------------------------ wiring
 $("join-form").addEventListener("submit", join);
-$("leave").addEventListener("click", leave);
+$("leave").addEventListener("click", () => leave());
 $("new-room").addEventListener("click", () => { $("room").value = newRoomName(); });
 $("mic-test").addEventListener("click", () => (state.testMic ? stopMicTest() : startMicTest()));
 $("mic-device").addEventListener("change", startMicTest);
@@ -789,7 +803,8 @@ $("mute").addEventListener("click", async () => {
 });
 
 $("copy-link").addEventListener("click", async () => {
-  const link = `${location.origin}${location.pathname}?room=${encodeURIComponent($("room-name").textContent)}`;
+  const link = state.meeting ? `${location.origin}/m/${state.meeting.code}`
+    : `${location.origin}${location.pathname}?room=${encodeURIComponent($("room-name").textContent)}`;
   try {
     await navigator.clipboard.writeText(link);
     toast("Invite link copied. Send it to the other person.", { key: "invite" });
@@ -798,7 +813,39 @@ $("copy-link").addEventListener("click", async () => {
   }
 });
 
-loadLanguages().catch((e) => {
+// Meeting mode: /m/<code> is a meeting of your organisation; your name comes from your account.
+async function loadMeeting() {
+  const m = location.pathname.match(/^\/m\/([a-z]{3}-[a-z]{4}-[a-z]{3})$/);
+  if (!m) return;
+  const [meRes, mtRes] = await Promise.all([fetch("/api/me"), fetch(`/api/meetings/${m[1]}`)]);
+  if (meRes.status === 401) { location.assign(`/login?next=${encodeURIComponent(location.pathname)}`); return; }
+  if (!mtRes.ok) throw new Error((await mtRes.json().catch(() => ({}))).detail || "Meeting not found");
+  const me = await meRes.json(), { meeting, myPreferences } = await mtRes.json();
+  state.meeting = { code: meeting.joinCode, title: meeting.title, myRole: meeting.myRole };
+  $("name").value = me.user.displayName;
+  $("name").readOnly = true;
+  $("room").value = meeting.joinCode;
+  $("room-field").hidden = true;
+  document.querySelector(".join-intro h1").textContent = meeting.title;
+  document.querySelector(".join-intro .lede").textContent =
+    meeting.status === "ENDED" || meeting.status === "CANCELLED" ? "This meeting has ended." : `Hosted by ${meeting.host.displayName}. Choose your languages and join.`;
+  const pref = (k, fallback) => myPreferences?.[k] || fallback;
+  const fill = (id, v) => { if (v && [...$(id).options].some((o) => o.value === v)) $(id).value = v; };
+  fill("speak", pref("speak", me.user.preferredLanguage));
+  fill("hear", pref("hear", $("speak").value));
+  fill("noise", pref("noise", $("noise").value));
+  if (myPreferences?.voice) setRadio("voice", myPreferences.voice);
+  if (meeting.status === "ENDED" || meeting.status === "CANCELLED") $("join-btn").disabled = true;
+}
+
+$("end-all").addEventListener("click", async () => {
+  if (!state.meeting || !confirm("End the meeting for everyone?")) return;
+  const r = await fetch(`/api/meetings/${state.meeting.code}/end`, { method: "POST" });
+  if (!r.ok) { toast((await r.json().catch(() => ({}))).detail || "Couldn't end the meeting"); return; }
+  await leave();
+});
+
+loadLanguages().then(loadMeeting).catch((e) => {
   $("join-error").textContent = `Could not load languages: ${e.message}`;
   $("join-error").hidden = false;
 });

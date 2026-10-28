@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import json
 import time
+import urllib.error
 import urllib.request
 import wave
 
@@ -36,10 +37,42 @@ def write_wav(path, pcm, sr):
         w.writeframes(pcm.astype(np.int16).tobytes())
 
 
-def token(api, name, room, speak, hear, voice):
-    body = json.dumps({"name": name, "room": room, "speak": speak, "hear": hear, "voice": voice}).encode()
-    req = urllib.request.Request(f"{api}/api/token", body, {"content-type": "application/json"})
-    return json.load(urllib.request.urlopen(req))
+def token(api, name, room, speak, hear, voice, noise="standard"):
+    """A call token for `name` in `room`. With accounts on (the default), each test caller signs up
+    (the room's first caller creates a test organisation and a meeting; the others join it with
+    its code); the open demo's /api/token is used only where it's enabled."""
+    body = json.dumps({"name": name, "room": room, "speak": speak, "hear": hear, "voice": voice, "noise": noise}).encode()
+    try:
+        return json.load(urllib.request.urlopen(urllib.request.Request(f"{api}/api/token", body, {"content-type": "application/json"})))
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    return _account_token(api, name, room, speak, hear, voice, noise)
+
+
+_rooms: dict = {}          # room -> {"org_code", "meeting"}
+
+
+def _account_token(api, name, room, speak, hear, voice, noise):
+    import http.cookiejar
+    import secrets
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    def call(path, payload):
+        req = urllib.request.Request(f"{api}{path}", json.dumps(payload).encode(), {"content-type": "application/json"})
+        return json.load(opener.open(req))
+
+    email = f"{name.lower()}-{secrets.token_hex(4)}@calltest.test"
+    info = _rooms.get(room)
+    if info is None:
+        call("/api/auth/signup", {"name": name, "email": email, "password": secrets.token_urlsafe(12), "organization": f"Call test {room}"})
+        org_code = json.load(opener.open(f"{api}/api/me"))["organization"]["joinCode"]
+        meeting = call("/api/meetings", {"title": room})["meeting"]["joinCode"]
+        _rooms[room] = info = {"org_code": org_code, "meeting": meeting}
+    else:
+        call("/api/auth/signup", {"name": name, "email": email, "password": secrets.token_urlsafe(12), "join_code": info["org_code"]})
+    return call(f"/api/meetings/{info['meeting']}/join", {"speak": speak, "hear": hear, "voice": voice, "noise": noise})
 
 
 class Caller:

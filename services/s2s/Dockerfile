@@ -10,4 +10,5 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 
 WORKDIR /srv
 COPY app /srv/app
+COPY migrations /srv/migrations
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

@@ -33,6 +33,7 @@ services:
   s2s-web:
     command: !override ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8091"]
     environment:
+      PUBLIC_URL: https://${PUBLIC_HOST}:8444
       LIVEKIT_URL: http://127.0.0.1:7890
       S2S_SPEAK_LANGUAGES: en,hi
       S2S_HEAR_LANGUAGES: en,hi

@@ -170,6 +170,24 @@ services:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     command: ["--config", "/etc/livekit.yaml", "--node-ip", "${PUBLIC_HOST}"]
 
+  # Accounts, organisations, meetings (and, later, transcripts with vector search: pgvector).
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    ports: ["127.0.0.1:${DB_PORT:-5434}:5432"]
+    environment:
+      POSTGRES_USER: meetmind
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: meetmind_v2
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./services/db/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meetmind -d meetmind_v2"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   s2s-agent:
     build: ./services/s2s
     image: indic-s2s:0.1
@@ -208,11 +226,16 @@ services:
     network_mode: host
     command: ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8090"]
     environment:
+      DATABASE_URL: postgresql+asyncpg://meetmind:${DB_PASSWORD}@127.0.0.1:${DB_PORT:-5434}/meetmind_v2
+      # Cookies are Secure when the page is served over HTTPS (always, behind the proxy).
+      PUBLIC_URL: https://${PUBLIC_HOST}:${HTTPS_PORT:-8443}
       LIVEKIT_URL: http://127.0.0.1:7880   # also re-dispatches the translator to rooms that lost it
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       BNR_GRPC_URL: ${BNR_GRPC_URL:-}      # only to tell the page whether "Studio" is available
-    depends_on: [s2s-agent]
+    depends_on:
+      s2s-agent: {condition: service_started}
+      db: {condition: service_healthy}
 
   proxy:
     image: caddy:2.10.2-alpine
@@ -226,3 +249,4 @@ services:
 
 volumes:
   caddy-data:
+  db-data:

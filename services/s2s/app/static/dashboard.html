@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Meetings · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-top">
+  <span class="brand">MeetMind <span class="who" id="org-name"></span></span>
+  <span class="row"><span class="who" id="me-name"></span><button id="logout" class="btn ghost small" type="button">Sign out</button></span>
+</header>
+<main class="dash">
+  <p id="dash-note-top" class="card" role="status" hidden style="padding:12px 18px"></p>
+  <section class="card" aria-labelledby="start-h">
+    <h2 id="start-h">Start or join</h2>
+    <div class="row">
+      <div class="field"><label for="instant-title">Title</label><input id="instant-title" maxlength="120" placeholder="Meeting"></div>
+      <button id="start-now" class="btn primary" type="button">Start a meeting now</button>
+    </div>
+    <form id="join-code-form" class="row" style="margin-top:14px">
+      <div class="field"><label for="join-code">Meeting code or link</label><input id="join-code" placeholder="abc-defg-hij" spellcheck="false"></div>
+      <button class="btn ghost" type="submit">Join</button>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="sched-h">
+    <h2 id="sched-h">Schedule a meeting</h2>
+    <form id="schedule-form">
+      <div class="row">
+        <div class="field"><label for="s-title">Title</label><input id="s-title" required maxlength="120"></div>
+        <div class="field"><label for="s-start">Starts</label><input id="s-start" type="datetime-local" required></div>
+        <div class="field"><label for="s-duration">Length</label>
+          <select id="s-duration"><option value="15">15 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="90">1.5 hours</option></select></div>
+      </div>
+      <div class="field" style="margin-top:12px"><label for="people-filter">Invite people from your organisation</label>
+        <input id="people-filter" placeholder="Filter by name or email">
+        <div class="people-pick" id="people" aria-label="People"></div>
+      </div>
+      <button class="btn primary" type="submit">Schedule</button>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="mine-h">
+    <h2 id="mine-h">Your meetings</h2>
+    <ul class="meetings" id="meetings"><li class="meta">Loading…</li></ul>
+  </section>
+
+  <section class="card" id="admin-card" hidden aria-labelledby="admin-h">
+    <h2 id="admin-h">Your organisation</h2>
+    <p>People sign up into <strong id="admin-org"></strong> with this join code: <span class="code" id="admin-code"></span></p>
+  </section>
+  <p id="dash-error" class="error" role="alert" hidden></p>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>

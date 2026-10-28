@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- one family per script; unicode-range means only the scripts on screen are downloaded -->
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&family=Noto+Sans+Bengali:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&family=Noto+Sans+Telugu:wght@400;600&family=Noto+Sans+Kannada:wght@400;600&family=Noto+Sans+Malayalam:wght@400;600&family=Noto+Sans+Gujarati:wght@400;600&family=Noto+Sans+Gurmukhi:wght@400;600&family=Noto+Sans+Oriya:wght@400;600&family=Noto+Naskh+Arabic:wght@400;600&family=Noto+Sans+Ol+Chiki&family=Noto+Sans+Meetei+Mayek&display=swap">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.js"></script>
 </head>
 <body>
@@ -35,7 +35,7 @@
       <label for="name">Your name</label>
       <input id="name" required maxlength="40" autocomplete="name" placeholder="e.g. Asha">
     </div>
-    <div class="field">
+    <div class="field" id="room-field">
       <label for="room">Room</label>
       <div class="input-row">
         <input id="room" required maxlength="60" spellcheck="false">
@@ -130,6 +130,12 @@
       </span>
       <span class="ctrl-label">Leave</span>
     </button>
+    <button id="end-all" class="ctrl danger" type="button" hidden>
+      <span class="ctrl-icon">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </span>
+      <span class="ctrl-label">End for all</span>
+    </button>
   </nav>
 </main>
 
@@ -192,6 +198,6 @@
 <!-- toasts: one manual popover in the top layer holding the stack -->
 <div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
 
-<script src="app.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

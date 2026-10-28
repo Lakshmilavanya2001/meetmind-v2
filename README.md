@@ -352,6 +352,49 @@ Re-run the benchmarks:
 .venv/bin/python clients/tts_stream.py --bench --concurrency 1 4 8
 ```
 
+## Accounts, organisations and meetings
+
+Since phase 2 (2026-10-28) the app has accounts: open `https://<host>:8444`, sign in or create an
+account. Signing up either creates an organisation (you're its owner) or joins one with its
+**join code** (owners and admins see it on the dashboard). From the dashboard you start a meeting
+now or schedule one, invite people from your organisation, join by code or link, and end or cancel
+meetings you host. A meeting's page is `/m/<code>`; your name comes from your account, and your
+language, voice and noise choices are remembered per meeting.
+
+| Rule | |
+|---|---|
+| Who joins | the host, invited people, and any member of the same organisation with the link; other organisations get "not found" |
+| Who invites and ends | the host and co-hosts; ending closes the LiveKit room and everyone is told "The host ended the meeting" |
+| Empty meetings | a live meeting whose room has closed (everyone left) for 2 minutes is ended by the watchdog |
+| Sessions | a random 32-byte cookie (`mm2_session`, HttpOnly, Secure, SameSite=Lax), only its SHA-256 stored, 30 days, sliding |
+| Passwords | argon2id, at least 10 characters; login rate-limited per address and per email |
+| Cross-site requests | state-changing requests with another site's `Origin` are refused |
+
+Data lives in this repo's own Postgres (`db` service, pgvector image, `127.0.0.1:5434`,
+`DB_PASSWORD` in `.env`); `services/s2s/migrations/*.sql` are applied in order at startup. The call
+token now comes from `POST /api/meetings/<code>/join` (identity = the user id, attributes `speak`,
+`hear`, `voice`, `noise`, `role`). The original open demo (`/api/token`, any room name, no account)
+is off unless `ALLOW_ANONYMOUS_ROOMS=1`; the test clients sign up test users instead.
+
+API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/members`,
+`POST /api/meetings`, `GET /api/meetings`, `GET /api/meetings/<code>`,
+`POST /api/meetings/<code>/invite|join|end`.
+
+**Tests.** Unit and API tests (`services/s2s/tests`, against the `meetmind_v2_test` database):
+
+```bash
+docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmind:<DB_PASSWORD>@127.0.0.1:5434/meetmind_v2_test \
+  -v $PWD/services/s2s:/srv -w /srv indic-s2s:0.1 sh -c "pip install -q -r requirements-dev.txt && pytest -q"
+```
+
+Browser test of the pages (`clients/e2e/accounts.spec.mjs`: sign up, join code, start and join a
+meeting, end for all):
+
+```bash
+docker run --rm --network host --ipc=host -v $PWD/clients/e2e:/e2e -w /e2e mcr.microsoft.com/playwright:v1.64.0-noble \
+  sh -c "npm install --silent && npx playwright test"
+```
+
 ## Translated calls (LiveKit)
 
 ```

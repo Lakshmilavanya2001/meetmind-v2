@@ -270,3 +270,27 @@ body.hide-english .via-english, body.hide-original .their-original { display: no
 .utt.to-mind { border-style: dashed; opacity: 0.9; }
 .utt.mind { border-left: 3px solid #7c5cff; }
 .utt.mind .who { color: #7c5cff; }
+
+/* ------------------------------------------------------------------ account pages */
+.tabs { display: flex; gap: 4px; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1; background: none; border: 0; padding: 10px; font: inherit; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.app-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px;
+  border-bottom: 1px solid var(--line); background: var(--surface); }
+.app-top .brand { font-weight: 700; }
+.app-top .who { color: var(--muted); font-size: 14px; }
+.dash { max-width: 960px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 16px; }
+.dash .card { padding: 18px; }
+.dash h2 { margin: 0 0 12px; font-size: 18px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.row .field { flex: 1 1 160px; margin: 0; }
+.meetings { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.meetings li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 4px;
+  border-bottom: 1px solid var(--line); }
+.meetings .meta { color: var(--muted); font-size: 13px; }
+.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface2); color: var(--muted); }
+.badge.live { background: var(--accent-soft); color: var(--accent); }
+.people-pick { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+.people-pick label { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }
+.code { font-family: ui-monospace, monospace; background: var(--surface2); padding: 2px 6px; border-radius: 6px; }

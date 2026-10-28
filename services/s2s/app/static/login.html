@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Sign in · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="join">
+  <section class="join-intro">
+    <p class="eyebrow">MeetMind</p>
+    <h1>Meetings where everyone<br>speaks their own language.</h1>
+    <p class="lede">Live voice translation, captions and Mind, an assistant you can ask privately during a call.</p>
+  </section>
+  <section class="card join-card">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tab-login" aria-selected="true" aria-controls="login-form">Sign in</button>
+      <button type="button" role="tab" id="tab-signup" aria-selected="false" aria-controls="signup-form">Create account</button>
+    </div>
+    <form id="login-form" autocomplete="on" role="tabpanel" aria-labelledby="tab-login">
+      <div class="field"><label for="login-email">Email</label><input id="login-email" type="email" required autocomplete="username"></div>
+      <div class="field"><label for="login-password">Password</label><input id="login-password" type="password" required autocomplete="current-password"></div>
+      <button type="submit" class="btn primary wide">Sign in</button>
+    </form>
+    <form id="signup-form" autocomplete="on" role="tabpanel" aria-labelledby="tab-signup" hidden>
+      <div class="field"><label for="su-name">Your name</label><input id="su-name" required maxlength="80" autocomplete="name"></div>
+      <div class="field"><label for="su-email">Email</label><input id="su-email" type="email" required autocomplete="email"></div>
+      <div class="field"><label for="su-password">Password</label><input id="su-password" type="password" required minlength="10" autocomplete="new-password">
+        <p class="hint">At least 10 characters.</p></div>
+      <fieldset class="field segmented">
+        <legend>Organisation</legend>
+        <label><input type="radio" name="org-mode" value="join" checked><span>Join one</span></label>
+        <label><input type="radio" name="org-mode" value="new"><span>Create one</span></label>
+      </fieldset>
+      <div class="field" id="join-code-field"><label for="su-code">Join code</label><input id="su-code" maxlength="60" spellcheck="false">
+        <p class="hint">Ask your organisation's admin for it.</p></div>
+      <div class="field" id="org-name-field" hidden><label for="su-org">Organisation name</label><input id="su-org" maxlength="80"></div>
+      <button type="submit" class="btn primary wide">Create account</button>
+    </form>
+    <p id="auth-error" class="error" role="alert" hidden></p>
+  </section>
+</main>
+<script src="/login.js"></script>
+</body>
+</html>

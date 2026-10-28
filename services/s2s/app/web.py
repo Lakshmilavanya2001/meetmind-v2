@@ -6,6 +6,7 @@ also forwards /rtc to LiveKit, so the page connects to wss://<same host>/.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -14,13 +15,18 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
 from pydantic import BaseModel, Field
 
-from . import bnr
+from . import bnr, db
+from .accounts import router as accounts_router
 from .languages import HEAR, SPEAK, describe
+from .meetings import end_abandoned
+from .meetings import router as meetings_router
+from .security import SESSION_COOKIE
 
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
@@ -31,7 +37,24 @@ AGENT_NAME = os.environ.get("S2S_AGENT_NAME", "indic-s2s")
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("s2s.web")
 
-app = FastAPI(title="Indic call translator demo")
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    """Apply database migrations, then keep the translator watchdog running for the app's life."""
+    if os.environ.get("DATABASE_URL"):
+        await db.migrate()
+    watchdog = asyncio.create_task(translator_watchdog())
+    try:
+        yield
+    finally:
+        watchdog.cancel()
+        await db.dispose()
+
+
+app = FastAPI(title="MeetMind v2", lifespan=lifespan)
+app.include_router(accounts_router)
+app.include_router(meetings_router)
+# The original open demo (anyone with a room name joins, no account) only when asked for.
+ALLOW_ANONYMOUS_ROOMS = os.environ.get("ALLOW_ANONYMOUS_ROOMS", "0") == "1"
 
 # LiveKit dispatches the translator once, when a room is created. If the worker
 # restarts or crashes mid-call, the room is left without one; this puts it back.
@@ -71,13 +94,14 @@ async def translator_watchdog():
             for name in list(dispatched_at):
                 if name not in {r.name for r in rooms}:
                     dispatched_at.pop(name)
+            # Meetings whose room has been empty and closed for a while are over.
+            if os.environ.get("DATABASE_URL"):
+                async with db.sessionmaker()() as s:
+                    n = await end_abandoned(s, {r.name for r in rooms})
+                    if n:
+                        log.info("ended %d meeting(s) whose room had closed", n)
         except Exception as e:  # noqa: BLE001 - keep watching
             log.warning("translator watchdog: %s", e)
-
-
-@app.on_event("startup")
-async def start_watchdog():
-    app.state.watchdog = asyncio.create_task(translator_watchdog())   # keep a reference
 
 
 class JoinRequest(BaseModel):
@@ -100,6 +124,8 @@ async def languages():
 
 @app.post("/api/token")
 async def token(req: JoinRequest):
+    if not ALLOW_ANONYMOUS_ROOMS:
+        raise HTTPException(404, "Not found")
     if req.speak not in SPEAK:
         raise HTTPException(400, f"cannot recognise speech in {req.speak!r}")
     if req.hear not in HEAR:
@@ -126,4 +152,39 @@ async def health():
     return {"status": "ok"}
 
 
-app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+# Pages. The call page is the same for every meeting (/m/<code>); the rest need a session cookie
+# to be useful, and redirect to the login page without one (the APIs check the session itself).
+def _page(name: str):
+    return FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/")
+async def home(request: Request):
+    if ALLOW_ANONYMOUS_ROOMS and not request.cookies.get(SESSION_COOKIE):
+        return _page("index.html")
+    return RedirectResponse("/dashboard" if request.cookies.get(SESSION_COOKIE) else "/login")
+
+
+@app.get("/login")
+async def login_page():
+    return _page("login.html")
+
+
+@app.get("/signup")
+async def signup_page():
+    return _page("login.html")
+
+
+@app.get("/dashboard")
+async def dashboard_page(request: Request):
+    return _page("dashboard.html") if request.cookies.get(SESSION_COOKIE) else RedirectResponse("/login")
+
+
+@app.get("/m/{code}")
+async def meeting_page(code: str, request: Request):
+    if not request.cookies.get(SESSION_COOKIE):
+        return RedirectResponse(f"/login?next=/m/{code}")
+    return _page("index.html")
+
+
+app.mount("/", StaticFiles(directory=STATIC, html=False), name="static")

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "description": "Browser tests of the meetmind-v2 pages (Playwright). Run: see README, 'Tests'.",
+  "type": "module",
+  "devDependencies": { "@playwright/test": "1.64.0" }
+}
