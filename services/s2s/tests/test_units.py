@@ -99,3 +99,20 @@ def test_reasoning_markers_are_stripped(monkeypatch):
     monkeypatch.setattr(llm, "LLM_URL", "http://x")
     for raw, want in [("A. </think> A.", "A."), ("<think>hmm</think>Answer", "Answer"), ("plain", "plain")]:
         assert asyncio.run(llm.chat(H(raw), []))["content"] == want
+
+
+def test_minds_private_answer_is_echo_only_for_its_listener():
+    import time as _t
+
+    import numpy as np
+
+    from app.agent import OUT_SR, PlayoutTimeline
+    tl = PlayoutTimeline()
+    now = _t.time()
+    loud = (np.ones(960) * 8000).astype(np.int16).tobytes()
+    tl.add(now, loud, owner="asha")                    # Mind answering Asha on her own track
+    tl.add(now + 0.02, loud)                           # a translation everyone may hear
+    asha = np.frombuffer(tl.read(now, int(OUT_SR * 0.04), "asha"), np.int16)
+    ben = np.frombuffer(tl.read(now, int(OUT_SR * 0.04), "ben"), np.int16)
+    assert asha[:960].any() and asha[960:1920].any()
+    assert not ben[:960].any() and ben[960:1920].any()

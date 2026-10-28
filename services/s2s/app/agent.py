@@ -317,27 +317,36 @@ class RivaTranslateClient:
 # ---------------------------------------------------------------------------- echo reference
 class PlayoutTimeline:
     """Everything the worker plays into the room, placed at the wall-clock time it starts
-    playing (48 kHz). Every microphone's echo canceller reads its reference from here."""
+    playing (48 kHz). Every microphone's echo canceller reads its reference from here.
+    Mind's private answers have an owner: only the asker hears them, so they count only
+    against the asker's own microphone (not as echo in anyone else's)."""
 
     def __init__(self, keep_s: float = 5.0):
         self.starts: list[float] = []
         self.chunks: list[np.ndarray] = []
+        self.owners: list[str | None] = []
         self.keep_s = keep_s
 
-    def add(self, start: float, pcm16: bytes):
+    def add(self, start: float, pcm16: bytes, owner: str | None = None):
         i = bisect.bisect(self.starts, start)
         self.starts.insert(i, start)
         self.chunks.insert(i, np.frombuffer(pcm16, np.int16).astype(np.float32))
+        self.owners.insert(i, owner)
         cutoff = time.time() - self.keep_s
         while self.starts and self.starts[0] < cutoff:
             self.starts.pop(0)
             self.chunks.pop(0)
+            self.owners.pop(0)
 
-    def read(self, t0: float, n: int) -> bytes:
-        """n samples of what was playing from wall time t0 on, as 16-bit PCM."""
+    def read(self, t0: float, n: int, listener: str | None = None) -> bytes:
+        """n samples of what was playing from wall time t0 on, as 16-bit PCM (private audio
+        only if it was played to `listener`)."""
         out = np.zeros(n, np.float32)
         j = bisect.bisect_left(self.starts, t0 - 0.1)       # chunks are 20 ms; start a bit early
         while j < len(self.starts) and self.starts[j] < t0 + n / OUT_SR:
+            if self.owners[j] is not None and self.owners[j] != listener:
+                j += 1
+                continue
             x = self.chunks[j]
             off = int(round((self.starts[j] - t0) * OUT_SR))
             a, b = max(0, off), min(n, off + len(x))
@@ -497,7 +506,7 @@ class ListenerOutput:
         play_at = time.time() + self.source.queued_duration       # after whatever is still queued
         if f"audio:{self.identity}" not in utt.marks:
             utt.marks[f"audio:{self.identity}"] = play_at
-        self.call.timeline.add(play_at, pcm)
+        self.call.timeline.add(play_at, pcm, self.identity if utt.id.startswith("mind:") else None)
         frame = rtc.AudioFrame(pcm, OUT_SR, 1, len(pcm) // 2)
         await self.source.capture_frame(frame)
 
@@ -734,9 +743,9 @@ class SpeakerInput:
         block = IN_SR // 100
         out = bytearray()
         for k in range(0, n - block + 1, block):
-            ref = self.call.timeline.read(clock - self.echo.seconds, OUT_SR // 100)
+            ref = self.call.timeline.read(clock - self.echo.seconds, OUT_SR // 100, self.identity)
             mic = data[2 * k: 2 * (k + block)]
-            self.echo.observe(clock, self.call.timeline.read(clock, OUT_SR // 100), mic)
+            self.echo.observe(clock, self.call.timeline.read(clock, OUT_SR // 100, self.identity), mic)
             far = rtc.AudioFrame(ref, OUT_SR, 1, OUT_SR // 100)
             apm.process_reverse_stream(far)
             near = rtc.AudioFrame(bytearray(mic), IN_SR, 1, block)
