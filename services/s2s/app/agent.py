@@ -39,10 +39,12 @@ from dataclasses import dataclass, field
 
 import aiohttp
 import numpy as np
+import soxr
 import websockets
 from livekit import rtc
 from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 
+from . import bnr
 from .asr import AsrStream
 from .languages import HEAR, PROMPT_NAME, SCRIPT, SPEAK
 
@@ -99,6 +101,7 @@ class Caller:
     speak: str
     hear: str
     voice: str
+    noise: str = "standard"      # off | standard | enhanced (in the browser) | studio (BNR in this agent)
 
     @staticmethod
     def from_participant(p: rtc.RemoteParticipant) -> "Caller":
@@ -106,11 +109,12 @@ class Caller:
         speak = a.get("speak", "hi") if a.get("speak") in SPEAK else "hi"
         hear = a.get("hear", speak) if a.get("hear") in HEAR else speak
         voice = "male" if a.get("voice") == "male" else "female"
-        return Caller(p.identity, p.name or p.identity, speak, hear, voice)
+        noise = a.get("noise") if a.get("noise") in ("off", "standard", "enhanced", "studio") else "standard"
+        return Caller(p.identity, p.name or p.identity, speak, hear, voice, noise)
 
     def public(self) -> dict:
         return {"identity": self.identity, "name": self.name, "speak": self.speak,
-                "hear": self.hear, "voice": self.voice}
+                "hear": self.hear, "voice": self.voice, "noise": self.noise}
 
 
 @dataclass
@@ -621,17 +625,18 @@ class SpeakerInput:
     def __init__(self, call: "CallTranslator", identity: str, track: rtc.RemoteAudioTrack):
         self.call, self.identity, self.track = call, identity, track
         self.lang: str | None = None
+        self.noise = "standard"                          # the caller's noise choice (attribute "noise")
         self.task: asyncio.Task | None = None
         # stream position (16 kHz samples sent) -> wall clock, to place ASR timestamps in time
         self.sent_samples: list[int] = []
         self.sent_wall: list[float] = []
         self.echo = EchoMonitor()
 
-    def start(self, lang: str):
-        if self.task is not None and self.lang == lang:
+    def start(self, lang: str, noise: str = "standard"):
+        if self.task is not None and self.lang == lang and self.noise == noise:
             return
         self.stop()
-        self.lang = lang
+        self.lang, self.noise = lang, noise
         self.task = asyncio.create_task(self._run(lang))
 
     def stop(self):
@@ -663,25 +668,48 @@ class SpeakerInput:
                 asr.close()
 
     async def _pump(self, asr: AsrStream):
-        sent = 0
-        stream = rtc.AudioStream(self.track, sample_rate=IN_SR, num_channels=1, frame_size_ms=20)
         apm = rtc.AudioProcessingModule(echo_cancellation=True) if ECHO_CANCEL else None
         self.echo = EchoMonitor()
-        clock = None                                    # wall time of the next mic sample
+        state = {"sent": 0, "clock": None}              # clock: wall time of the next mic sample
+
+        def take(data: bytes):
+            """16 kHz mic audio (cleaned, if noise removal is on) -> echo cancellation -> VAD/ASR."""
+            if apm is not None:
+                data, state["clock"] = self._cancel_echo(apm, data, state["clock"])
+            asr.feed(data)
+            state["sent"] += len(data) // 2
+            self.sent_samples.append(state["sent"])
+            self.sent_wall.append(time.time())
+            if len(self.sent_samples) > 50 * 600:                # keep ~10 minutes of mapping
+                del self.sent_samples[:25 * 600], self.sent_wall[:25 * 600]
+
+        # Studio noise removal (NVIDIA BNR): the mic at 48 kHz through BNR, then down to 16 kHz,
+        # so background noise never reaches the voice detector or the recogniser.
+        cleaner = None
+        if self.noise == "studio" and bnr.available():
+            down = soxr.ResampleStream(bnr.BNR_RATE, IN_SR, 1, dtype="int16")
+
+            def cleaned(pcm48: bytes):
+                out = down.resample_chunk(np.frombuffer(pcm48, dtype="<i2"))
+                if len(out):
+                    take(out.astype("<i2").tobytes())
+
+            cleaner = bnr.BnrStream(cleaned)
+            cleaner.start()
+        stream = rtc.AudioStream(self.track, sample_rate=bnr.BNR_RATE if cleaner else IN_SR, num_channels=1, frame_size_ms=20)
+        log.info("microphone of %s: %s", self.identity, "noise removal (BNR) on" if cleaner else "as captured")
         try:
             async for ev in stream:
                 data = ev.frame.data.tobytes()
-                if apm is not None:
-                    data, clock = self._cancel_echo(apm, data, clock)
-                asr.feed(data)
-                sent += len(data) // 2
-                self.sent_samples.append(sent)
-                self.sent_wall.append(time.time())
-                if len(self.sent_samples) > 50 * 600:            # keep ~10 minutes of mapping
-                    del self.sent_samples[:25 * 600], self.sent_wall[:25 * 600]
+                if cleaner is not None:
+                    cleaner.push(data)
+                else:
+                    take(data)
         except Exception:  # noqa: BLE001
             log.exception("microphone pump for %s failed", self.identity)
         finally:
+            if cleaner is not None:
+                await cleaner.close()
             await stream.aclose()
 
     def _cancel_echo(self, apm: rtc.AudioProcessingModule, data: bytes, clock: float | None):
@@ -762,7 +790,7 @@ class CallTranslator:
                 if pub.kind == rtc.TrackKind.KIND_AUDIO and pub.track is not None:
                     self.attach_mic(ident, pub.track)
             if ident in self.inputs:
-                self.inputs[ident].start(caller.speak)       # restarts ASR if `speak` changed
+                self.inputs[ident].start(caller.speak, caller.noise)  # restarts ASR if `speak` or `noise` changed
         if changed:
             self.update_permissions()
             await self.status()
@@ -777,7 +805,7 @@ class CallTranslator:
             cur.stop()
         inp = SpeakerInput(self, ident, track)
         self.inputs[ident] = inp
-        inp.start(self.callers[ident].speak)
+        inp.start(self.callers[ident].speak, self.callers[ident].noise)
 
     def update_permissions(self):
         """Each translation track may only be subscribed to by the caller it is for."""

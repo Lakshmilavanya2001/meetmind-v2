@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from livekit import api
 from pydantic import BaseModel, Field
 
+from . import bnr
 from .languages import HEAR, SPEAK, describe
 
 API_KEY = os.environ["LIVEKIT_API_KEY"]
@@ -85,11 +86,16 @@ class JoinRequest(BaseModel):
     speak: str
     hear: str
     voice: str = "female"
+    # off / standard / enhanced: the browser's own processing; studio: NVIDIA BNR in the agent
+    noise: str = "standard"
+
+
+NOISE_MODES = ("off", "standard", "enhanced", "studio")
 
 
 @app.get("/api/languages")
 async def languages():
-    return describe()
+    return {**describe(), "noise": {"studio": bnr.available()}}
 
 
 @app.post("/api/token")
@@ -105,7 +111,8 @@ async def token(req: JoinRequest):
            .with_identity(identity)
            .with_name(req.name.strip())
            .with_attributes({"speak": req.speak, "hear": req.hear,
-                             "voice": "male" if req.voice == "male" else "female"})
+                             "voice": "male" if req.voice == "male" else "female",
+                             "noise": req.noise if req.noise in NOISE_MODES and (req.noise != "studio" or bnr.available()) else "standard"})
            .with_ttl(timedelta(hours=4))
            .with_grants(api.VideoGrants(room_join=True, room=room, can_publish=True, can_subscribe=True,
                                         can_publish_data=True, can_update_own_metadata=True))

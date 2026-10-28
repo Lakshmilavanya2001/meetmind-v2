@@ -22,6 +22,8 @@ const state = {
   agentPresent: false,
   sameLangNotice: "",
   testMic: null,          // pre-join microphone check
+  studio: false,          // server noise removal (NVIDIA BNR) available
+  noiseChain: Promise.resolve(),
 };
 
 const store = {
@@ -159,6 +161,11 @@ async function loadLanguages() {
   fillSelect($("speak-live"), state.langs.speak);
   fillSelect($("hear-live"), state.langs.hear);
   setRadio("voice", store.get("voice", "female"));
+  // "Studio" (NVIDIA BNR in the agent) is offered only when the server has it.
+  state.studio = !!state.langs.noise?.studio;
+  for (const sel of [$("noise"), $("noise-live")]) sel.querySelector('option[value="studio"]').hidden = !state.studio;
+  const noise = store.get("noise", "standard");
+  $("noise").value = noise === "studio" && !state.studio ? "standard" : noise;
   $("name").value = store.get("name", "");
   const params = new URLSearchParams(location.search);
   $("room").value = params.get("room") || store.get("room", "") || newRoomName();
@@ -212,9 +219,9 @@ async function join(ev) {
   btn.textContent = "Joining...";
   $("join-error").hidden = true;
   const req = { name: $("name").value.trim(), room: $("room").value.trim(),
-                speak: $("speak").value, hear: $("hear").value, voice: radioValue("voice") };
+                speak: $("speak").value, hear: $("hear").value, voice: radioValue("voice"), noise: $("noise").value };
   const micId = state.testMic ? $("mic-device").value : store.get("mic", "");
-  for (const k of ["name", "room", "speak", "hear", "voice"]) store.set(k, req[k]);
+  for (const k of ["name", "room", "speak", "hear", "voice", "noise"]) store.set(k, req[k]);
   if (micId) store.set("mic", micId);
   stopMicTest();
   try {
@@ -223,15 +230,15 @@ async function join(ev) {
                                           body: JSON.stringify(req) });
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
     const { token, identity, room: roomName } = await r.json();
-    state.me = { identity, name: req.name, speak: req.speak, hear: req.hear, voice: req.voice };
+    state.me = { identity, name: req.name, speak: req.speak, hear: req.hear, voice: req.voice, noise: req.noise };
 
     const room = new Room({ adaptiveStream: true, dynacast: true,
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
-                              ...(micId ? { deviceId: micId } : {}) } });
+      audioCaptureDefaults: { ...micConstraints(req.noise), ...(micId ? { deviceId: micId } : {}) } });
     state.room = room;
     wireRoom(room);
     await room.connect(`wss://${location.host}`, token);
     await room.localParticipant.setMicrophoneEnabled(true);
+    if (req.noise === "enhanced") await applyNoise("enhanced");
     await room.startAudio();
     watchMyMic();
 
@@ -587,6 +594,7 @@ function onTranslationLevel(v) {
 
 // ------------------------------------------------------------------ settings
 function syncSettingsForm() {
+  $("noise-live").value = state.me.noise;
   $("speak-live").value = state.me.speak;
   $("hear-live").value = state.me.hear;
   setRadio("voice-live", state.me.voice);
@@ -627,6 +635,80 @@ function applyCaptionPrefs() {
   document.body.classList.toggle("hide-original", !$("show-original").checked);
 }
 
+// ------------------------------------------------------------------ noise removal
+// off: raw mic (echo cancellation stays on) · standard: the browser's noise suppression ·
+// enhanced: RNNoise in the browser (an AI filter on the published track) · studio: the plain mic
+// is sent and the agent cleans it with NVIDIA BNR before speech detection (two cleaners in a row
+// make artefacts, so the browser's own suppression is off then).
+function micConstraints(mode) {
+  const dsp = mode === "standard" || mode === "enhanced";
+  return { echoCancellation: true, noiseSuppression: dsp, autoGainControl: dsp };
+}
+
+let rnnoiseWasm = null;
+function rnnoiseProcessor() {
+  let ctx = null, node = null, source = null;
+  const quietly = (f) => { try { f(); } catch { /* already torn down */ } };
+  const teardown = async () => {
+    quietly(() => source?.disconnect());
+    quietly(() => node?.destroy());
+    quietly(() => node?.disconnect());
+    await ctx?.close().catch(() => {});
+    ctx = node = source = null;
+  };
+  const proc = {
+    name: "rnnoise",
+    async init({ track }) {
+      const lib = await import("./noise/web-noise-suppressor.js");
+      rnnoiseWasm ??= lib.loadRnnoise({ url: "noise/rnnoise.wasm", simdUrl: "noise/rnnoise_simd.wasm" });
+      ctx = new AudioContext({ sampleRate: 48000 });
+      await ctx.audioWorklet.addModule("noise/rnnoiseWorklet.js");
+      node = new lib.RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary: await rnnoiseWasm });
+      source = ctx.createMediaStreamSource(new MediaStream([track]));
+      const dest = ctx.createMediaStreamDestination();
+      source.connect(node).connect(dest);
+      proc.processedTrack = dest.stream.getAudioTracks()[0];
+    },
+    async restart(opts) { await teardown(); await proc.init(opts); },
+    async destroy() { await teardown(); proc.processedTrack = undefined; },
+  };
+  return proc;
+}
+
+// Changes are applied one at a time, in order.
+function applyNoise(mode) {
+  state.noiseChain = state.noiseChain.then(async () => {
+    const track = state.room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (!track) return;
+    // Take the RNNoise filter off before restarting the mic: while it's on, the track is the filter's
+    // output, and asking for "its" device again fails (OverconstrainedError).
+    if (track.getProcessor()) await track.stopProcessor();
+    const deviceId = track.mediaStreamTrack?.getSettings().deviceId;
+    try {
+      await track.restartTrack({ ...micConstraints(mode), ...(deviceId ? { deviceId: { exact: deviceId } } : {}) });
+    } catch (e) {
+      if (e?.name !== "OverconstrainedError" || !deviceId) throw e;
+      await track.restartTrack(micConstraints(mode));          // that mic is gone: the default one
+    }
+    if (mode === "enhanced") await track.setProcessor(rnnoiseProcessor());
+    watchMyMic();
+  }).catch((e) => {
+    console.error("[noise] couldn't apply", mode, e);
+    toast(`Couldn't change noise removal${e?.message ? `: ${e.message}` : ". Try again, or rejoin the call."}`);
+  });
+  return state.noiseChain;
+}
+
+async function changeNoise() {
+  const mode = $("noise-live").value;
+  state.me.noise = mode;
+  store.set("noise", mode);
+  await applyNoise(mode);
+  await state.room?.localParticipant.setAttributes({ noise: mode });   // the agent switches BNR on or off
+  const label = $("noise-live").selectedOptions[0]?.textContent.split(" (")[0] ?? mode;
+  toast(`Background noise removal: ${label}.`, { key: "noise" });
+}
+
 // ------------------------------------------------------------------ wiring
 $("join-form").addEventListener("submit", join);
 $("leave").addEventListener("click", leave);
@@ -637,6 +719,7 @@ $("speak").addEventListener("change", () => { if (!state.hearTouched) $("hear").
 $("hear").addEventListener("change", () => { state.hearTouched = true; });
 
 $("speak-live").addEventListener("change", updateAttributes);
+$("noise-live").addEventListener("change", changeNoise);
 $("hear-live").addEventListener("change", updateAttributes);
 document.querySelectorAll('input[name="voice-live"]').forEach((r) => r.addEventListener("change", updateAttributes));
 $("mic-live").addEventListener("change", (e) => switchDevice("audioinput", e.target.value));

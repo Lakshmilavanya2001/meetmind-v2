@@ -194,6 +194,10 @@ services:
       S2S_VAD_MIN_SILENCE_MS: "500"     # pause that ends an utterance
       S2S_ECHO_CANCEL: ${S2S_ECHO_CANCEL:-1}  # cancel the room's translated audio out of every mic
       S2S_LOG_TEXT: ${S2S_LOG_TEXT:-1}        # log transcripts and translations (debugging)
+      # "Studio" noise removal: NVIDIA Maxine BNR (gRPC host:port) on a caller's mic before speech
+      # detection, for callers who choose it. Empty: the option isn't offered.
+      BNR_GRPC_URL: ${BNR_GRPC_URL:-}
+      BNR_MAX_STREAMS: ${BNR_MAX_STREAMS:-8}
     depends_on:
       livekit: {condition: service_started}
       tts: {condition: service_healthy}
@@ -207,6 +211,7 @@ services:
       LIVEKIT_URL: http://127.0.0.1:7880   # also re-dispatches the translator to rooms that lost it
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      BNR_GRPC_URL: ${BNR_GRPC_URL:-}      # only to tell the page whether "Studio" is available
     depends_on: [s2s-agent]
 
   proxy:

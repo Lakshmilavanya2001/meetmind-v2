@@ -542,6 +542,25 @@ of audio, first audio after 371 ms), and both heard it at 1.57 s.
 docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test_shared.py
 ```
 
+**Background noise removal** (each caller picks it on the join form or in Settings; attribute
+`noise`):
+
+| Choice | Where | What it does |
+|---|---|---|
+| Off | browser | raw microphone (echo cancellation stays on) |
+| Standard (default) | browser | the browser's noise suppression and gain control |
+| Enhanced | browser | RNNoise (WebAssembly AI filter, `static/noise/`) on the published mic track |
+| Studio | agent | the plain mic is sent; the agent runs it through **NVIDIA Maxine BNR** (`BNR_GRPC_URL`, gRPC, 48 kHz, `services/s2s/app/bnr.py`) before echo cancellation, speech detection and recognition |
+
+Studio adds ~13 ms per 10 ms chunk plus 40 ms of model lookahead. If BNR fails, the original
+audio passes through and the stream is reopened (2-30 s later); `BNR_MAX_STREAMS` (default 8)
+caps streams per agent process. It cleans what the agent hears, not the "original voice" a
+listener can mix in. Measured with `clients/noise_test.py` (5 s of noise alone, a sentence in
+noise, 5 s of noise alone; 2026-10-28): noise alone gave no utterances either way (Silero already
+ignores it). Under the sentence, Studio fixed words lost to office and street noise ("…look great"
+→ "…Speeds look great") and, with people chatting in a café, kept almost the whole sentence where
+Standard kept "Hi, this is priya from the" and a junk fragment.
+
 **Echo protection.** A browser's echo cancellation removes only its own speaker's sound.
 When two callers sit in the same room, or one plays the call loudly enough to beat
 the browser, translated speech leaks into a microphone, gets transcribed and translated

@@ -6,3 +6,5 @@ fastapi==0.136.3
 uvicorn[standard]==0.54.0
 aiohttp==3.14.5                  # translate: streamed OpenAI chat completions (livekit-agents needs it too)
 onnxruntime==1.25.1              # Silero VAD (CPU): cuts each mic stream into utterances for Whisper
+grpcio==1.84.0                   # NVIDIA Maxine BNR (noise removal before speech detection), gRPC
+soxr==1.1.0                      # resampling: BNR's 48 kHz output down to the 16 kHz speech detection uses
