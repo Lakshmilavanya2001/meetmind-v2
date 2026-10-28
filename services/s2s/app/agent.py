@@ -633,7 +633,9 @@ class SpeakerInput:
         self.echo = EchoMonitor()
 
     def start(self, lang: str, noise: str = "standard"):
-        if self.task is not None and self.lang == lang and self.noise == noise:
+        # Only Studio changes what the agent does with the mic; the other modes are the browser's.
+        if self.task is not None and self.lang == lang and (self.noise == "studio") == (noise == "studio"):
+            self.noise = noise
             return
         self.stop()
         self.lang, self.noise = lang, noise
