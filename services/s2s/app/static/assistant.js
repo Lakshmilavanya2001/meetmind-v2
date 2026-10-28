@@ -232,37 +232,60 @@ const SAY_YES = { en: "Say yes to go ahead, or no to cancel.", hi: "आगे �
 const voiceState = { listening: false, ctx: null, stream: null, node: null, chunks: [], audio: null };
 const status = (t) => { $("voice-status").textContent = t; };
 
+// Why the microphone didn't start, in words the user can act on.
+function micProblem(e) {
+  const n = e?.name || "";
+  if (!window.isSecureContext) return "The microphone needs the HTTPS address of this page.";
+  if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) return "This browser can't record here. Try a current Chrome, Edge, Firefox or Safari.";
+  if (n === "NotAllowedError" || n === "SecurityError") return "Microphone access is blocked. Allow it for this site (the icon in the address bar), then tap the mic again.";
+  if (n === "NotFoundError" || n === "OverconstrainedError") return "No microphone found. Connect one and tap the mic again.";
+  if (n === "NotReadableError" || n === "AbortError") return "The microphone is busy in another app or tab. Close it there and try again.";
+  return `The microphone didn't start: ${e?.message || e}`;
+}
+
 async function startListening() {
-  if (voiceState.listening || busy) return;
+  if (voiceState.listening) return;
+  if (busy) { status("Wait for the current reply to finish."); return; }
   stopSpeaking();
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) { status(micProblem()); return; }
+  status("Allow the microphone if your browser asks…");
   try {
     voiceState.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  } catch (e) { fail(new Error(`Microphone not available: ${e.message}`)); return; }
-  const ctx = voiceState.ctx ??= new AudioContext();
-  await ctx.resume();
-  await ctx.audioWorklet.addModule("/recorder-worklet.js").catch(() => {});
-  const src = ctx.createMediaStreamSource(voiceState.stream);
-  const node = new AudioWorkletNode(ctx, "recorder");
-  voiceState.node = node;
-  voiceState.chunks = [];
-  voiceState.listening = true;
-  $("mic").setAttribute("aria-pressed", "true");
-  status("Listening…");
-  const started = performance.now();
-  let heard = 0, quietSince = null;
-  node.port.onmessage = ({ data }) => {
-    voiceState.chunks.push(data);
-    let sum = 0;
-    for (const v of data) sum += v * v;
-    const rms = Math.sqrt(sum / data.length);
-    $("mic").style.setProperty("--level", Math.min(1, rms * 12).toFixed(2));
-    const now = performance.now();
-    if (rms > 0.015) { heard += data.length / ctx.sampleRate; quietSince = null; } else quietSince ??= now;
-    const total = (now - started) / 1000;
-    if ((heard > 0.25 && quietSince && now - quietSince > 1100) || total > 30) stopListening(true);
-    else if (heard < 0.25 && total > 8) stopListening(false);          // nothing said
-  };
-  src.connect(node);
+    const ctx = voiceState.ctx ??= new AudioContext();
+    await ctx.resume();
+    if (!voiceState.worklet) {
+      await ctx.audioWorklet.addModule(`/recorder-worklet.js?v=${Date.now()}`);
+      voiceState.worklet = true;
+    }
+    const src = ctx.createMediaStreamSource(voiceState.stream);
+    const node = new AudioWorkletNode(ctx, "recorder");
+    voiceState.node = node;
+    voiceState.chunks = [];
+    voiceState.listening = true;
+    $("mic").setAttribute("aria-pressed", "true");
+    status("Listening… (tap the mic when you're done)");
+    const started = performance.now();
+    let heard = 0, quietSince = null;
+    node.port.onmessage = ({ data }) => {
+      voiceState.chunks.push(data);
+      let sum = 0;
+      for (const v of data) sum += v * v;
+      const rms = Math.sqrt(sum / data.length);
+      $("mic").style.setProperty("--level", Math.min(1, rms * 12).toFixed(2));
+      const now = performance.now();
+      if (rms > 0.01) { heard += data.length / ctx.sampleRate; quietSince = null; } else quietSince ??= now;
+      const total = (now - started) / 1000;
+      if ((heard > 0.25 && quietSince && now - quietSince > 1100) || total > 30) stopListening(true);
+      else if (heard < 0.25 && total > 8) stopListening(false);          // nothing said
+    };
+    src.connect(node);
+  } catch (e) {
+    console.error("assistant microphone", e);
+    voiceState.stream?.getTracks().forEach((t) => t.stop());
+    voiceState.listening = false;
+    $("mic").setAttribute("aria-pressed", "false");
+    status(micProblem(e));
+  }
 }
 
 function stopListening(send_ = true) {
@@ -273,8 +296,8 @@ function stopListening(send_ = true) {
   voiceState.stream?.getTracks().forEach((t) => t.stop());
   $("mic").setAttribute("aria-pressed", "false");
   $("mic").style.setProperty("--level", 0);
-  if (!send_) { status($("hands-free").checked ? "Hands-free paused (nothing heard). Tap the mic to talk." : "Tap the mic and speak"); return; }
-  transcribeAndSend(voiceState.chunks, voiceState.ctx.sampleRate).catch(fail);
+  if (!send_) { status("I didn't hear anything. Check the microphone level, then tap the mic and speak."); return; }
+  transcribeAndSend(voiceState.chunks, voiceState.ctx.sampleRate).catch((e) => status(`Couldn't send what you said: ${e.message}`));
 }
 
 // Float32 at the device rate -> 16 kHz mono 16-bit WAV (what Parakeet takes).

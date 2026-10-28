@@ -6,11 +6,15 @@ const BASE = process.env.BASE_URL || "https://10.79.254.169:8444";
 // Voice to voice on the assistant page: a recorded question plays into the microphone, listening stops
 // after the pause, Parakeet's text appears as the message, the agents answer, and Magpie reads it out.
 test("meetmind-v2: talk to the assistant and hear its reply", async () => {
+  // A recorded question as the microphone. (Headless Chromium refuses every microphone request without
+  // the fake-UI switch, even with the permission granted.)
   const browser = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
     `--use-file-for-fake-audio-capture=${path.resolve("speech_then_silence.wav")}`, "--autoplay-policy=no-user-gesture-required"] });
   const tag = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   try {
-    const page = await (await browser.newContext({ ignoreHTTPSErrors: true, baseURL: BASE })).newPage();
+    const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL: BASE });
+    await context.grantPermissions(["microphone"], { origin: BASE });
+    const page = await context.newPage();
     expect((await page.request.post("/api/auth/signup", { headers: { origin: BASE },
       data: { name: "Asha Rao", email: `asha-${tag}@v2.test`, password: "correct-horse-1", organization: `Acme ${tag}` } })).ok()).toBeTruthy();
     await page.goto("/assistant");
@@ -26,6 +30,24 @@ test("meetmind-v2: talk to the assistant and hear its reply", async () => {
     expect(s.status()).toBe(200);
     expect(s.headers()["content-type"]).toContain("audio/wav");
     await expect(page.locator("#voice-status")).toHaveText(/Speaking|Tap the mic/, { timeout: 30_000 });
+  } finally {
+    await browser.close();
+  }
+});
+
+// A browser that blocks the microphone gets told how to fix it (instead of a button that does nothing).
+test("meetmind-v2: a blocked microphone is explained next to the mic button", async () => {
+  const browser = await chromium.launch();                   // no fake-UI flag: the permission is denied
+  const tag = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  try {
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true, baseURL: BASE });
+    const page = await ctx.newPage();
+    expect((await page.request.post("/api/auth/signup", { headers: { origin: BASE },
+      data: { name: "Asha Rao", email: `asha-${tag}@v2.test`, password: "correct-horse-1", organization: `Acme ${tag}` } })).ok()).toBeTruthy();
+    await page.goto("/assistant");
+    await page.getByRole("button", { name: "Speak to the assistant" }).click();
+    await expect(page.locator("#voice-status")).toHaveText(/blocked|No microphone|didn't start/i, { timeout: 15_000 });
+    await expect(page.locator("#mic")).toHaveAttribute("aria-pressed", "false");
   } finally {
     await browser.close();
   }

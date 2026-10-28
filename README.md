@@ -33,8 +33,11 @@ ports and its own LiveKit, and uses the same model servers:
 4. Open `https://<PUBLIC_HOST>:8444`, create an account (the first one creates the organisation),
    and share the join code from the dashboard.
 
-**Updating:** `git pull`, rebuild, and restart `s2s-agent` and `s2s-web`. A restart drops calls in
-progress, so first check that none are live:
+**Updating:** `git pull`, `docker compose build s2s-agent`, then restart what changed. Restarting
+`s2s-agent` interrupts translation in calls in progress. The watchdog brings the translator back in about
+10 s, but check that no call is live first. For a change to the pages or API only, run
+`docker compose up -d --no-deps s2s-web`. Without `--no-deps`, Compose also recreates `s2s-agent` (same
+image), which interrupts calls. To check for live calls:
 
 ```bash
 docker compose exec -T db psql -U meetmind -d meetmind_v2 -tAc "SELECT count(*) FROM meetings WHERE status='LIVE'"

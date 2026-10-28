@@ -107,3 +107,12 @@ async def test_signed_in_pages_redirect_to_login(client):
     for path in ("/assistant", "/bookings", "/reminders", "/settings"):
         r = await client.get(path)
         assert r.status_code == 200 and "<html" in r.text, path
+
+
+async def test_pages_always_load_the_current_scripts(client):
+    await signup(client, "Asha Rao", "asha@acme.test", org="Acme")
+    from app.web import ASSET_VERSION
+    html = (await client.get("/assistant")).text
+    assert f'src="/assistant.js?v={ASSET_VERSION}"' in html and f'href="/style.css?v={ASSET_VERSION}"' in html
+    js = await client.get(f"/assistant.js?v={ASSET_VERSION}")
+    assert js.status_code == 200 and js.headers["cache-control"] == "no-cache" and "etag" in js.headers

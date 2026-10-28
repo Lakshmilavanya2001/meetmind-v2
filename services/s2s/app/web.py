@@ -18,7 +18,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
 from pydantic import BaseModel, Field
@@ -197,8 +197,31 @@ async def ready():
 
 # Pages. The call page is the same for every meeting (/m/<code>); the rest need a session cookie
 # to be useful, and redirect to the login page without one (the APIs check the session itself).
+# Each release gets new script and style addresses (?v=<hash of the static files>), and every static
+# file is re-checked with the server before use, so a browser never runs a stale copy after an update.
+def _asset_version() -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(STATIC.rglob("*")):
+        if f.is_file() and f.suffix in (".js", ".css", ".html"):
+            h.update(f.name.encode() + f.read_bytes())
+    return h.hexdigest()[:10]
+
+
+ASSET_VERSION = _asset_version()
+_ASSET_REF = re.compile(r'((?:src|href)="/[\w./-]+\.(?:js|css))"')
+
+
 def _page(name: str):
-    return FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
+    html = _ASSET_REF.sub(rf'\1?v={ASSET_VERSION}"', (STATIC / name).read_text())
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+class _Static(StaticFiles):
+    async def get_response(self, path, scope):
+        r = await super().get_response(path, scope)
+        r.headers.setdefault("Cache-Control", "no-cache")      # revalidate (ETag) every time
+        return r
 
 
 @app.get("/")
@@ -253,4 +276,4 @@ async def meeting_page(code: str, request: Request):
     return _page("index.html")
 
 
-app.mount("/", StaticFiles(directory=STATIC, html=False), name="static")
+app.mount("/", _Static(directory=STATIC, html=False), name="static")
