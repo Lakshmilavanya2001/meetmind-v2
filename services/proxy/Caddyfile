@@ -6,9 +6,11 @@
 	default_sni {$PUBLIC_HOST}
 }
 
-https://{$PUBLIC_HOST}:8443, https://localhost:8443 {
+# Ports come from the environment so this stack can share a host with another LiveKit app
+# (docker-compose.host.yml sets them; the defaults are the original single-app ports).
+https://{$PUBLIC_HOST}:{$HTTPS_PORT:8443}, https://localhost:{$HTTPS_PORT:8443} {
 	tls internal
 	@livekit path /rtc /rtc/* /twirp/*
-	reverse_proxy @livekit 127.0.0.1:7880
-	reverse_proxy 127.0.0.1:8090
+	reverse_proxy @livekit 127.0.0.1:{$LIVEKIT_PORT:7880}
+	reverse_proxy 127.0.0.1:{$WEB_PORT:8090}
 }

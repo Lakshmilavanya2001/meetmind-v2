@@ -1,0 +1,15 @@
+# LiveKit for meetmind-v2 on a host that already runs another LiveKit (meetmind's on 7880/7881,
+# UDP 50000-50200): this one takes 7890/7891 and UDP 50300-50500. Keys from LIVEKIT_KEYS,
+# advertised IP from --node-ip (docker-compose.host.yml).
+port: 7890
+bind_addresses: ["127.0.0.1"]   # signaling only through the HTTPS proxy (wss://host:8444/rtc)
+rtc:
+  tcp_port: 7891
+  port_range_start: 50300
+  port_range_end: 50500
+  use_external_ip: false
+room:
+  empty_timeout: 120
+  departure_timeout: 20
+logging:
+  level: info

@@ -1,0 +1,44 @@
+# meetmind-v2 on a host that already runs meetmind (10.79.254.169): only the call stack runs here,
+# with its own LiveKit on free ports, and the model servers meetmind uses:
+#   speech recognition  Parakeet 1.1B RNNT multilingual, offline (Riva HTTP API)   ASR_URL
+#   translation         Qwen (OpenAI chat API)                                     S2S_TRANSLATE_URL, S2S_TRANSLATE_MODEL
+#   speech              NVIDIA Magpie TTS Multilingual (NIM)                       MAGPIE_TTS_URL
+# Ports: HTTPS page 8444, web app 8091, LiveKit 7890 (signaling) / 7891 (TCP) / 50300-50500 (UDP).
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.host.yml in .env, then docker compose up -d --build
+
+services:
+  asr: {profiles: [own-models]}
+  translate: {profiles: [own-models]}
+  tts-lm: {profiles: [own-models]}
+  tts: {profiles: [own-models]}
+
+  livekit:
+    volumes: !override ["./services/livekit/livekit.host.yaml:/etc/livekit.yaml:ro"]
+
+  s2s-agent:
+    depends_on: !reset {}
+    environment:
+      LIVEKIT_URL: ws://127.0.0.1:7890
+      S2S_HEALTH_PORT: "8092"                 # 8081 is taken on this host
+      ASR_URL: ${ASR_URL:?set ASR_URL in .env (Parakeet offline, http://host:8001)}
+      TRANSLATE_API: ${S2S_TRANSLATE_API:-chat}
+      TRANSLATE_URL: ${S2S_TRANSLATE_URL:?set S2S_TRANSLATE_URL in .env (an OpenAI-compatible /v1 URL)}
+      TRANSLATE_MODEL: ${S2S_TRANSLATE_MODEL:?set S2S_TRANSLATE_MODEL in .env}
+      TTS_API: magpie
+      MAGPIE_TTS_URL: ${MAGPIE_TTS_URL:?set MAGPIE_TTS_URL in .env (http://host:9000/v1)}
+      S2S_SPEAK_LANGUAGES: en,hi
+      S2S_HEAR_LANGUAGES: en,hi
+
+  s2s-web:
+    command: !override ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8091"]
+    environment:
+      LIVEKIT_URL: http://127.0.0.1:7890
+      S2S_SPEAK_LANGUAGES: en,hi
+      S2S_HEAR_LANGUAGES: en,hi
+
+  proxy:
+    environment:
+      HTTPS_PORT: "8444"
+      LIVEKIT_PORT: "7890"
+      WEB_PORT: "8091"

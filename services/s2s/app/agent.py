@@ -946,7 +946,9 @@ class CallTranslator:
 # ---------------------------------------------------------------------------- worker
 # drain_timeout: on restart, leave calls within seconds (the web app's watchdog hands
 # them to the new worker) instead of lingering until Docker kills the process
+# The worker's health endpoint (default 8081) is configurable for hosts where that port is taken.
 server = AgentServer(num_idle_processes=int(os.environ.get("S2S_IDLE_PROCESSES", "2")), host="127.0.0.1",
+                     port=int(os.environ.get("S2S_HEALTH_PORT", "8081")),
                      drain_timeout=int(os.environ.get("S2S_DRAIN_TIMEOUT_S", "5")))
 
 
