@@ -51,7 +51,7 @@ Restore instructions are in the script; a restore was tested on 2026-10-28. Run 
   and deletes old read notifications;
 - `TRANSCRIPT_RETENTION_DAYS` deletes saved transcripts that many days after a meeting ends;
 - hosts can delete a meeting's transcript;
-- CI (`.github/workflows/ci.yml`) runs lint, the 144 tests against a throwaway Postgres, and the
+- CI (`.github/workflows/ci.yml`) runs lint, the 147 tests against a throwaway Postgres, and the
   page script checks on every push.
 
 **Not done:** a load test of concurrent calls (the model servers are shared with MeetMind, so a
@@ -523,6 +523,15 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
 - **Dates** (`dates.py`): dateparser plus rules for weekdays, "tonight", "in 2 hours" and bare
   times ("at 4" without am/pm is read as 4 pm, and the user is told). The model never does date
   arithmetic.
+- **Talk to it on the Assistant page:** tap the mic and speak, in English or Hindi.
+  - Listening stops after a 1.1 s pause, or at 30 s.
+  - The browser records 16 kHz audio, Parakeet turns it into text (about 0.1 s), and the agents
+    reply in voice mode (one or two short sentences).
+  - Magpie reads the reply aloud, in the assistant's voice (`S2S_ASSISTANT_VOICE`), in about 0.2–0.4 s.
+  - For an action, it reads out what it will do; say **yes** or **no** (the Confirm card works too).
+  - **Hands-free** listens again after each reply. Tapping the mic interrupts the reply.
+  - Routes: `POST /api/assistant/transcribe?lang=en|hi` (a WAV recording) and `POST /api/assistant/speak`
+    (WAV out); chat takes `voice: true`.
 - **In a call** (`voice.py`): "Hey Mind" goes through the same agents in voice mode: one or two spoken
   sentences, on the asker's own track. Each caller has one conversation per meeting, also shown on
   their Assistant page. For an action, Mind reads out what it will do and the caller says **yes**
@@ -561,7 +570,7 @@ event per line: `conversation`, `handoff`, `tool_start`, `tool_end`, `confirmati
 `GET /api/bookings`, `POST /api/bookings/<id>/cancel`, `/api/rides[/<id>[/cancel|advance]]`, `/api/reminders`, `/api/notifications`,
 `/api/profile/phone|sms`, `/api/integrations/uber/*`.
 
-**Tests.** 144 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
+**Tests.** 147 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
 
 ```bash
 docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmind:<DB_PASSWORD>@127.0.0.1:5434/meetmind_v2_test \
@@ -571,7 +580,8 @@ docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmin
 Browser tests of the pages (`clients/e2e/accounts.spec.mjs`: sign up, join code, start and join a
 meeting, end for all; `assistant.spec.mjs`: the assistant schedules a meeting only after Confirm,
 with the real model; `pages.spec.mjs`: every page under the security headers; `voices.spec.mjs`: the voice
-and tone picker, a sample, joining with it and changing it in the call):
+and tone picker, a sample, joining with it and changing it in the call; `assistant-voice.spec.mjs`: speaking to the
+assistant and hearing its reply):
 
 ```bash
 docker run --rm --network host --ipc=host -v $PWD/clients/e2e:/e2e -w /e2e mcr.microsoft.com/playwright:v1.64.0-noble \

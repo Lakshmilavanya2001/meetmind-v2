@@ -60,7 +60,7 @@ function chip(t) {
 }
 
 function confirmCard(actionId, summary, decided) {
-  const li = el("li", { class: "confirm card" }, el("div", { class: "msg-agent", text: "Needs your confirmation" }), el("p", { text: summary }));
+  const li = el("li", { class: "confirm card", "data-action": actionId }, el("div", { class: "msg-agent", text: "Needs your confirmation" }), el("p", { text: summary }));
   const status = el("p", { class: "meta" });
   if (decided) { status.textContent = decided; li.append(status); return li; }
   const yes = el("button", { class: "btn primary small", type: "button", text: "Confirm" });
@@ -157,7 +157,9 @@ async function open(id) {
   loadList().catch(fail);
 }
 
-async function send(text) {
+async function send(text, voice = false) {
+  const spoken = [];                 // what to read aloud when the reply was asked for by voice
+  let asks = false;
   busy = true;
   $("send").disabled = true;
   $("err").hidden = true;
@@ -170,7 +172,8 @@ async function send(text) {
   const chips = new Map();
   try {
     const res = await fetch("/api/assistant/chat", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: text, conversationId, meetingCode: conversationId ? null : meetingCode }) });
+      body: JSON.stringify({ message: text, conversationId, meetingCode: conversationId ? null : meetingCode,
+                             voice, language: voice ? $("voice-lang").value : null }) });
     if (res.status === 401) { location.assign("/login?next=/assistant"); return; }
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || res.statusText); }
     const reader = res.body.getReader();
@@ -191,16 +194,23 @@ async function send(text) {
         else if (ev.type === "handoff") { if (ev.total > 1 || ev.agent !== "general") log.append(handoff(ev)); }
         else if (ev.type === "tool_start") { const c = chip({ ...ev }); chips.set(ev.id, c); log.append(c); }
         else if (ev.type === "tool_end") { const c = chip({ ...ev, label: chips.get(ev.id)?.querySelector(".tool-label")?.textContent }); chips.get(ev.id)?.replaceWith(c); chips.set(ev.id, c); }
-        else if (ev.type === "confirmation") log.append(confirmCard(ev.actionId, ev.summary));
+        else if (ev.type === "confirmation") { log.append(confirmCard(ev.actionId, ev.summary)); asks = true; }
+        else if (ev.type === "decided") {            // a spoken "yes" / "no" decided the waiting action
+          const card = log.querySelector(`.confirm[data-action="${ev.actionId}"] .row`);
+          card?.replaceWith(el("p", { class: "meta", text: ev.decision === "confirm" ? (ev.ok ? "Confirmed" : "Failed") : "Cancelled" }));
+          log.append(bubble("assistant", ev.text, { link: ev.link }));
+          spoken.push(ev.text);
+        }
         else if (ev.type === "plan") log.append(planCard(ev.plan));
-        else if (ev.type === "text") log.append(bubble("assistant", ev.text, { agent: ev.agent }));
-        else if (ev.type === "guard") log.append(bubble("assistant", ev.message, { guard: true }));
+        else if (ev.type === "text") { log.append(bubble("assistant", ev.text, { agent: ev.agent })); spoken.push(ev.text); }
+        else if (ev.type === "guard") { log.append(bubble("assistant", ev.message, { guard: true })); spoken.push(ev.message); }
         else if (ev.type === "error") fail(new Error(ev.message));
         scroll();
       }
     }
   } catch (e) { fail(e); }
   finally { thinking.remove(); busy = false; $("send").disabled = false; loadList().catch(() => {}); }
+  if (voice) await speakReply(spoken.slice(-2).join(" "), asks);
 }
 
 $("chat-form").addEventListener("submit", (ev) => {
@@ -214,4 +224,129 @@ $("msg").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("chat-form").requestSubmit(); }
 });
 $("new-chat").addEventListener("click", () => open(null));
+// ------------------------------------------------------------------ voice: talk to the assistant
+// Tap the mic and speak; listening stops after a pause. Parakeet turns it into text, the agents
+// answer in short spoken sentences, and Magpie reads the reply. "Yes" / "no" confirm an action.
+// Hands-free: after each reply, it listens again.
+const SAY_YES = { en: "Say yes to go ahead, or no to cancel.", hi: "आगे बढ़ने के लिए हाँ कहें, या रद्द करने के लिए ना।" };
+const voiceState = { listening: false, ctx: null, stream: null, node: null, chunks: [], audio: null };
+const status = (t) => { $("voice-status").textContent = t; };
+
+async function startListening() {
+  if (voiceState.listening || busy) return;
+  stopSpeaking();
+  try {
+    voiceState.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch (e) { fail(new Error(`Microphone not available: ${e.message}`)); return; }
+  const ctx = voiceState.ctx ??= new AudioContext();
+  await ctx.resume();
+  await ctx.audioWorklet.addModule("/recorder-worklet.js").catch(() => {});
+  const src = ctx.createMediaStreamSource(voiceState.stream);
+  const node = new AudioWorkletNode(ctx, "recorder");
+  voiceState.node = node;
+  voiceState.chunks = [];
+  voiceState.listening = true;
+  $("mic").setAttribute("aria-pressed", "true");
+  status("Listening…");
+  const started = performance.now();
+  let heard = 0, quietSince = null;
+  node.port.onmessage = ({ data }) => {
+    voiceState.chunks.push(data);
+    let sum = 0;
+    for (const v of data) sum += v * v;
+    const rms = Math.sqrt(sum / data.length);
+    $("mic").style.setProperty("--level", Math.min(1, rms * 12).toFixed(2));
+    const now = performance.now();
+    if (rms > 0.015) { heard += data.length / ctx.sampleRate; quietSince = null; } else quietSince ??= now;
+    const total = (now - started) / 1000;
+    if ((heard > 0.25 && quietSince && now - quietSince > 1100) || total > 30) stopListening(true);
+    else if (heard < 0.25 && total > 8) stopListening(false);          // nothing said
+  };
+  src.connect(node);
+}
+
+function stopListening(send_ = true) {
+  if (!voiceState.listening) return;
+  voiceState.listening = false;
+  voiceState.node?.port.close();
+  voiceState.node?.disconnect();
+  voiceState.stream?.getTracks().forEach((t) => t.stop());
+  $("mic").setAttribute("aria-pressed", "false");
+  $("mic").style.setProperty("--level", 0);
+  if (!send_) { status($("hands-free").checked ? "Hands-free paused (nothing heard). Tap the mic to talk." : "Tap the mic and speak"); return; }
+  transcribeAndSend(voiceState.chunks, voiceState.ctx.sampleRate).catch(fail);
+}
+
+// Float32 at the device rate -> 16 kHz mono 16-bit WAV (what Parakeet takes).
+function wav16k(chunks, rate) {
+  const n = chunks.reduce((a, c) => a + c.length, 0);
+  const all = new Float32Array(n);
+  let o = 0;
+  for (const c of chunks) { all.set(c, o); o += c.length; }
+  const ratio = rate / 16000, out = Math.floor(n / ratio);
+  const pcm = new Int16Array(out);
+  for (let i = 0; i < out; i++) {
+    const a = Math.floor(i * ratio), b = Math.min(n - 1, Math.floor((i + 1) * ratio));
+    let s = 0;
+    for (let j = a; j <= b; j++) s += all[j];
+    pcm[i] = Math.max(-1, Math.min(1, s / (b - a + 1))) * 32767;
+  }
+  const buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf);
+  const str = (off, t) => { for (let i = 0; i < t.length; i++) v.setUint8(off + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+async function transcribeAndSend(chunks, rate) {
+  status("Working out what you said…");
+  const r = await fetch(`/api/assistant/transcribe?lang=${$("voice-lang").value}`, { method: "POST", headers: { "content-type": "audio/wav" }, body: wav16k(chunks, rate) });
+  if (r.status === 401) { location.assign("/login?next=/assistant"); return; }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Speech recognition failed");
+  const { text } = await r.json();
+  if (!text) {
+    status("I didn't catch that. Tap the mic and try again.");
+    return;
+  }
+  status("Thinking…");
+  await send(text, true);
+}
+
+async function speakReply(text, asks) {
+  const lang = $("voice-lang").value;
+  if (asks) text = `${text} ${SAY_YES[lang]}`;
+  if (!text.trim()) { afterReply(); return; }
+  try {
+    const r = await fetch("/api/assistant/speak", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, lang }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "No spoken reply");
+    const url = URL.createObjectURL(await r.blob());
+    const a = new Audio(url);
+    voiceState.audio = a;
+    $("mic").classList.add("speaking");
+    status("Speaking… (tap the mic to interrupt)");
+    a.onended = () => { URL.revokeObjectURL(url); voiceState.audio = null; $("mic").classList.remove("speaking"); afterReply(); };
+    await a.play();
+  } catch (e) {
+    status(`Reply shown above (${e.message}).`);
+    afterReply();
+  }
+}
+
+function stopSpeaking() {
+  if (!voiceState.audio) return;
+  voiceState.audio.pause();
+  voiceState.audio = null;
+  $("mic").classList.remove("speaking");
+}
+
+function afterReply() {
+  if ($("hands-free").checked) startListening();
+  else status("Tap the mic and speak");
+}
+
+$("mic").addEventListener("click", () => (voiceState.listening ? stopListening(true) : startListening()));
+api("/api/me").then((m) => { if (m.user.preferredLanguage === "hi") $("voice-lang").value = "hi"; }).catch(() => {});
+
 open(conversationId).catch(fail);
