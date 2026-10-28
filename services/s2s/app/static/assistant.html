@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Assistant · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-top">
+  <a class="brand" href="/dashboard">MeetMind</a>
+  <span class="row"><a class="btn ghost small" href="/dashboard">Meetings</a><a class="btn ghost small" href="/bookings">Bookings</a><a class="btn ghost small" href="/reminders">Reminders</a></span>
+</header>
+<main class="chat-wrap">
+  <aside class="chat-list card" aria-label="Conversations">
+    <button id="new-chat" class="btn primary small" type="button">New chat</button>
+    <ul id="convs" class="convs"></ul>
+  </aside>
+  <section class="chat card" aria-label="Chat">
+    <p id="attached" class="save-banner" hidden></p>
+    <ol id="log" class="chat-log" aria-live="polite"></ol>
+    <p id="err" class="error" role="alert" hidden></p>
+    <form id="chat-form" class="chat-form">
+      <label for="msg" class="sr-only">Message</label>
+      <textarea id="msg" rows="2" maxlength="4000" placeholder="Schedule a review with Priya tomorrow at 4 pm · What did we decide about the budget? · Book a table for 3 on Friday"></textarea>
+      <button id="send" class="btn primary" type="submit">Send</button>
+    </form>
+  </section>
+</main>
+<script src="/common.js"></script>
+<script src="/assistant.js"></script>
+</body>
+</html>

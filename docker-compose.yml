@@ -35,6 +35,31 @@ x-health: &health
   retries: 3
   start_period: 20m                     # first start downloads models from NGC
 
+# The assistant's settings, shared by the web app (chat page, reminders) and the call agent ("Hey Mind").
+# All optional: without them that feature reports it isn't set up.
+x-assistant-env: &assistant-env
+  # Summaries, answers and the agents (a chat LLM) and transcript search (an embedding model), OpenAI-compatible.
+  ASSISTANT_LLM_URL: ${ASSISTANT_LLM_URL:-}
+  ASSISTANT_LLM_MODEL: ${ASSISTANT_LLM_MODEL:-}
+  EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-2048}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}                  # 32 bytes, base64: encrypts Uber logins
+  PUBLIC_URL: https://${PUBLIC_HOST}:${HTTPS_PORT:-8443}
+  # Uber (connect in Settings); sandbox unless UBER_ENV=production
+  UBER_CLIENT_ID: ${UBER_CLIENT_ID:-}
+  UBER_CLIENT_SECRET: ${UBER_CLIENT_SECRET:-}
+  UBER_ENV: ${UBER_ENV:-sandbox}
+  GEOCODER_URL: ${GEOCODER_URL:-}
+  GEOCODER_CONTACT: ${GEOCODER_CONTACT:-}
+  GEOCODER_COUNTRIES: ${GEOCODER_COUNTRIES:-in}
+  # SMS reminders and phone verification (Twilio); SMS_DEV_OUTBOX=true shows texts on the page instead (development only)
+  TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+  TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+  TWILIO_FROM: ${TWILIO_FROM:-}
+  SMS_DEV_OUTBOX: ${SMS_DEV_OUTBOX:-false}
+  SMS_ALLOWED_PREFIXES: ${SMS_ALLOWED_PREFIXES:-+91}
+
 services:
   # AI4Bharat IndicConformer (one 120M Conformer-CTC model per language: Malayalam, Hindi,
   # Kannada, Telugu, Tamil), converted with NVIDIA's nemo2riva + riva-build and served by
@@ -216,6 +241,7 @@ services:
       # detection, for callers who choose it. Empty: the option isn't offered.
       BNR_GRPC_URL: ${BNR_GRPC_URL:-}
       BNR_MAX_STREAMS: ${BNR_MAX_STREAMS:-8}
+      <<: *assistant-env
       # Saved transcripts (when a meeting's host turns saving on) go to the app's database.
       DATABASE_URL: postgresql+asyncpg://meetmind:${DB_PASSWORD}@127.0.0.1:${DB_PORT:-5434}/meetmind_v2
     depends_on:
@@ -229,18 +255,11 @@ services:
     command: ["uvicorn", "app.web:app", "--host", "127.0.0.1", "--port", "8090"]
     environment:
       DATABASE_URL: postgresql+asyncpg://meetmind:${DB_PASSWORD}@127.0.0.1:${DB_PORT:-5434}/meetmind_v2
-      # Cookies are Secure when the page is served over HTTPS (always, behind the proxy).
-      PUBLIC_URL: https://${PUBLIC_HOST}:${HTTPS_PORT:-8443}
       LIVEKIT_URL: http://127.0.0.1:7880   # also re-dispatches the translator to rooms that lost it
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       BNR_GRPC_URL: ${BNR_GRPC_URL:-}      # only to tell the page whether "Studio" is available
-      # Summaries and answers (a chat LLM) and transcript search (an embedding model), OpenAI-compatible.
-      ASSISTANT_LLM_URL: ${ASSISTANT_LLM_URL:-}
-      ASSISTANT_LLM_MODEL: ${ASSISTANT_LLM_MODEL:-}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-2048}
+      <<: *assistant-env
     depends_on:
       s2s-agent: {condition: service_started}
       db: {condition: service_healthy}

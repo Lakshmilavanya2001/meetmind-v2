@@ -11,3 +11,5 @@ soxr==1.1.0                      # resampling: BNR's 48 kHz output down to the 1
 sqlalchemy[asyncio]==2.1.4       # accounts, organisations, meetings (Postgres)
 asyncpg==0.32.0
 argon2-cffi==25.1.0              # password hashing (argon2id)
+dateparser==1.4.3                # the assistant's dates: "tomorrow at 3 PM" -> an exact time, without the LLM doing date arithmetic
+cryptography==50.0.2             # AES-256-GCM for secrets at rest (Uber login tokens)

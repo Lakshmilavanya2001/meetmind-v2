@@ -299,3 +299,39 @@ body.hide-english .via-english, body.hide-original .their-original { display: no
 .cites { padding-left: 18px; }
 .save-banner { background: var(--accent-soft); color: var(--accent); font-size: 14px; padding: 6px 16px; text-align: center; }
 a.brand { color: inherit; text-decoration: none; }
+
+/* Assistant chat */
+.chat-wrap { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 240px 1fr; gap: 16px; height: calc(100dvh - 64px); }
+.chat-list { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.convs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 14px; }
+.convs a { display: block; padding: 6px 8px; border-radius: 8px; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convs a.on, .convs a:hover { background: var(--surface2); }
+.convs .meta { color: var(--muted); font-size: 12px; padding: 0 8px; }
+.chat { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+.chat-log { list-style: none; margin: 0; padding: 16px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1; }
+.chat-form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); align-items: end; }
+.chat-form textarea { flex: 1; resize: vertical; min-height: 44px; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.msg { max-width: 80%; padding: 10px 14px; border-radius: 14px; background: var(--surface2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--mine); }
+.msg.guard { border: 1px solid var(--danger); }
+.msg-agent { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+.handoff { font-size: 12.5px; color: var(--muted); }
+.tool { font-size: 13px; color: var(--muted); padding: 4px 10px; border-left: 3px solid var(--line); }
+.tool.done { border-left-color: var(--ok); }
+.tool.failed { border-left-color: var(--danger); }
+.tool.waiting { border-left-color: var(--accent); }
+.tool.running .tool-label::after { content: " …"; }
+.tool .tool-label { font-weight: 600; color: var(--text); }
+.cands { margin: 4px 0 0; padding-left: 18px; }
+.confirm, .plan { padding: 12px 14px; max-width: 80%; border: 1px solid var(--accent); }
+.confirm p, .plan p { margin: 4px 0 10px; }
+.plan-steps { padding-left: 4px; list-style: none; margin: 0 0 10px; display: grid; gap: 6px; font-size: 14px; }
+.plan-steps .meta { color: var(--muted); font-size: 12.5px; padding-left: 16px; }
+.plan-steps .step.failed { color: var(--danger); }
+@media (max-width: 720px) {
+  .chat-wrap { grid-template-columns: 1fr; height: auto; }
+  .chat-list { max-height: 160px; }
+  .chat { height: calc(100dvh - 260px); }
+  .msg, .confirm, .plan { max-width: 100%; }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

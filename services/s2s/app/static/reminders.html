@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Reminders · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-top">
+  <a class="brand" href="/dashboard">MeetMind</a>
+  <a class="btn ghost small" href="/dashboard">Meetings</a>
+</header>
+<main class="dash">
+  <section class="card" aria-labelledby="rem-h">
+    <h2 id="rem-h">Upcoming reminders</h2>
+    <ul class="meetings" id="reminders"><li class="meta">Loading…</li></ul>
+    <form id="add-form" style="margin-top:14px">
+      <div class="row">
+        <div class="field"><label for="r-text">Remind me to</label><input id="r-text" required maxlength="300" placeholder="Send the site report"></div>
+        <div class="field"><label for="r-when">When</label><input id="r-when" type="datetime-local" required></div>
+      </div>
+      <label class="switch" style="margin-top:12px"><input type="checkbox" id="r-sms"><span>Also text it to my phone</span></label>
+      <button class="btn primary" type="submit">Add reminder</button>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="notif-h">
+    <div class="row" style="justify-content:space-between"><h2 id="notif-h">Notifications <span class="badge" id="unread" hidden></span></h2>
+      <button class="btn ghost small" type="button" id="read-all">Mark all read</button></div>
+    <ul class="meetings" id="notifications"><li class="meta">Loading…</li></ul>
+  </section>
+
+  <section class="card" aria-labelledby="phone-h">
+    <h2 id="phone-h">Mobile number</h2>
+    <p class="hint" id="phone-state"></p>
+    <form id="phone-form" class="row">
+      <div class="field"><label for="phone">Number in international format</label><input id="phone" type="tel" autocomplete="tel" maxlength="30" placeholder="+919812345678"></div>
+      <button class="btn ghost" type="submit">Save</button>
+    </form>
+    <div id="verify-box" hidden style="margin-top:14px">
+      <button class="btn ghost" type="button" id="send-code">Text me a code</button>
+      <form id="code-form" class="row" style="margin-top:12px">
+        <div class="field"><label for="code">6-digit code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}"></div>
+        <button class="btn primary" type="submit">Verify</button>
+      </form>
+    </div>
+    <label class="switch" style="margin-top:14px"><input type="checkbox" id="sms-default"><span>Text me reminders by default</span></label>
+  </section>
+
+  <section class="card" aria-labelledby="sms-h">
+    <h2 id="sms-h">Your text messages</h2>
+    <p class="hint" id="sms-note"></p>
+    <ul class="meetings" id="sms-list"><li class="meta">Loading…</li></ul>
+  </section>
+  <p id="err" class="error" role="alert" hidden></p>
+</main>
+<script src="/common.js"></script>
+<script src="/reminders.js"></script>
+</body>
+</html>

@@ -31,7 +31,13 @@ async def chat(http: aiohttp.ClientSession, messages: list[dict], *, max_tokens:
         if r.status != 200:
             raise RuntimeError(f"LLM HTTP {r.status}: {(await r.text())[:200]}")
         data = await r.json()
-    return data["choices"][0]["message"]
+    msg = data["choices"][0]["message"]
+    content = msg.get("content")
+    if content and "think>" in content:              # stray reasoning despite thinking off: keep only the reply
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
+        content = content.rsplit("</think>", 1)[-1].replace("<think>", "").strip()
+        msg = {**msg, "content": content}
+    return msg
 
 
 _MD = [(re.compile(r"\[([^\]]+)\]\([^)]+\)"), r"\1"),          # [text](link) -> text

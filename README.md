@@ -411,6 +411,73 @@ API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/me
   `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`; the agent gets `DATABASE_URL`. Not done yet: retention
   (automatic deletion after N days) and deleting a transcript by hand.
 
+**The assistant: agents and tools** (phase 4, 2026-10-28). A port of meetmind's agents to Python
+(`services/s2s/app/assistant/`). Page: **Assistant** (`/assistant`); in a call, say **"Hey Mind …"**.
+
+- **A team of agents.** A coordinator (`agents.py`, one guided-JSON call) sends each message to one
+  to three specialists, in order: Meetings & calls, Meeting knowledge, Food & dining, Travel,
+  Movies, Reminders, Planner, General. Each specialist runs the tool loop (`engine.py`) with **only
+  its own tools**. A specialist that asks a question pauses the rest until the user answers.
+- **42 tools** (`tools/`): people and meetings (search people, list meetings and participants,
+  availability and free slots from MeetMind's own calendar, start, schedule, invite, reschedule,
+  cancel, remove, end, transcript saving on/off, what was just said in the call); knowledge
+  (transcript, summary, action items, cited answers); sandbox food, cabs, tables and movies
+  (`app/commerce`); reminders by notification or SMS (`app/reminders`); Uber (`app/uber`, connect in
+  **Settings**).
+- **Nothing changes without the user.** Reading runs at once. Anything that changes something
+  (schedule, invite, book, order, remind, cancel, end) is checked first with the same permissions
+  as running it, and shown as one exact sentence with **Confirm / Cancel**. It runs only on Confirm,
+  only for the user who asked, once, within 15 minutes. The **Planner** researches first, then
+  proposes a whole plan (up to 6 steps, each checked the same way) for one **Approve**. Steps run
+  in order, a step whose prerequisite failed is skipped, and failed parts get one revised plan
+  (at most two revisions).
+- **Guards** (`guards.py`):
+  - a person matching several names can't be acted on until the user picks one;
+  - addresses and pickup points must come from the conversation;
+  - email addresses must be ones the user typed;
+  - "I've scheduled…" with no successful tool behind it gets a correction;
+  - instructions inside transcripts or tool results are ignored.
+- **Dates** (`dates.py`): dateparser plus rules for weekdays, "tonight", "in 2 hours" and bare
+  times ("at 4" without am/pm is read as 4 pm, and the user is told). The model never does date
+  arithmetic.
+- **In a call** (`voice.py`): "Hey Mind" goes through the same agents in voice mode: one or two spoken
+  sentences, on the asker's own track. Each caller has one conversation per meeting, also shown on
+  their Assistant page. For an action, Mind reads out what it will do and the caller says **yes**
+  or **no**, without the wake phrase, for 20 s. Rooms without accounts (the open demo) keep the
+  quick call-only answer. Plans are approved on the page, not by voice.
+- **Other pages:** **Bookings** (`/bookings`: sandbox orders and Uber rides, with Cancel),
+  **Reminders** (`/reminders`: reminders, notifications, mobile number and verification),
+  **Settings** (`/settings`: connect Uber).
+- **Measured** (real Qwen, `clients/e2e/assistant.spec.mjs` and a scripted run):
+  - schedule-with-Ben chat: 6 s to the confirmation card;
+  - asked which of two Priyas;
+  - a team-dinner plan (event and table) in 14.5 s, both steps done on approval;
+  - by voice: "set up the meeting we just agreed on" read the call, proposed Monday 3 pm with Ben,
+    and "yes" booked it.
+- **Settings** (shared by the web app and the agent, `x-assistant-env` in `docker-compose.yml`):
+  - `ASSISTANT_LLM_URL` / `ASSISTANT_LLM_MODEL`;
+  - `ENCRYPTION_KEY` (32 bytes, base64; encrypts Uber logins);
+  - `UBER_CLIENT_ID` / `UBER_CLIENT_SECRET` / `UBER_ENV` (`sandbox` by default);
+  - `GEOCODER_URL` / `GEOCODER_CONTACT` / `GEOCODER_COUNTRIES`;
+  - `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM`, `SMS_ALLOWED_PREFIXES`
+    (`+91`), `SMS_DEV_OUTBOX` (development only: texts show on the page instead of being sent).
+
+  Without them, that feature says it isn't set up.
+- **Limits:**
+  - availability is MeetMind's calendar only (no Google or Outlook);
+  - invitations show on the dashboard, with no email;
+  - food, cabs, tables and movies are a sandbox (nothing real is ordered or charged);
+  - Uber fare quotes are held in the process that made them, so a voice Uber booking must be
+    confirmed by voice.
+
+API: `POST /api/assistant/chat` (`{message, conversationId?, meetingCode?}`, streamed as one JSON
+event per line: `conversation`, `handoff`, `tool_start`, `tool_end`, `confirmation`, `plan`, `text`,
+`guard`, `done`, `error`), `GET /api/assistant/conversations[/<id>]`,
+`DELETE /api/assistant/conversations/<id>`, `POST /api/assistant/actions/<id>`
+(`{decision: confirm|reject}`), `POST /api/assistant/plans/<id>` (`{decision: approve|reject}`),
+`GET /api/bookings`, `POST /api/bookings/<id>/cancel`, `/api/rides[/<id>[/cancel|advance]]`, `/api/reminders`, `/api/notifications`,
+`/api/profile/phone|sms`, `/api/integrations/uber/*`.
+
 **Tests.** Unit and API tests (`services/s2s/tests`, against the `meetmind_v2_test` database):
 
 ```bash
@@ -418,8 +485,9 @@ docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmin
   -v $PWD/services/s2s:/srv -w /srv indic-s2s:0.1 sh -c "pip install -q -r requirements-dev.txt && pytest -q"
 ```
 
-Browser test of the pages (`clients/e2e/accounts.spec.mjs`: sign up, join code, start and join a
-meeting, end for all):
+Browser tests of the pages (`clients/e2e/accounts.spec.mjs`: sign up, join code, start and join a
+meeting, end for all; `assistant.spec.mjs`: the assistant schedules a meeting only after Confirm,
+with the real model):
 
 ```bash
 docker run --rm --network host --ipc=host -v $PWD/clients/e2e:/e2e -w /e2e mcr.microsoft.com/playwright:v1.64.0-noble \

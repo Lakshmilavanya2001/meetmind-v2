@@ -30,6 +30,11 @@ from .meetings import end_abandoned
 from .meetings import router as meetings_router
 from . import transcripts
 from .transcripts import router as transcripts_router
+from .assistant.api import router as assistant_router
+from .commerce.api import router as bookings_router
+from .reminders.api import router as reminders_router
+from .reminders.service import send_due_reminders
+from .uber.api import router as uber_router
 from .security import SESSION_COOKIE
 
 API_KEY = os.environ["LIVEKIT_API_KEY"]
@@ -58,6 +63,8 @@ app = FastAPI(title="MeetMind v2", lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(meetings_router)
 app.include_router(transcripts_router)
+for r in (assistant_router, bookings_router, reminders_router, uber_router):
+    app.include_router(r)
 # The original open demo (anyone with a room name joins, no account) only when asked for.
 ALLOW_ANONYMOUS_ROOMS = os.environ.get("ALLOW_ANONYMOUS_ROOMS", "0") == "1"
 
@@ -110,6 +117,14 @@ async def translator_watchdog():
                     await transcripts.background(s, http)
         except Exception as e:  # noqa: BLE001 - keep watching
             log.warning("translator watchdog: %s", e)
+        if os.environ.get("DATABASE_URL"):
+            try:                                     # due reminders, even if LiveKit is unreachable
+                async with db.sessionmaker()() as s:
+                    n = await send_due_reminders(s)
+                    if n:
+                        log.info("sent %d reminder(s)", n)
+            except Exception as e:  # noqa: BLE001
+                log.warning("reminders: %s", e)
 
 
 class JoinRequest(BaseModel):
@@ -198,6 +213,17 @@ async def transcript_page(code: str, request: Request):
 @app.get("/search")
 async def search_page(request: Request):
     return _page("search.html") if request.cookies.get(SESSION_COOKIE) else RedirectResponse("/login?next=/search")
+
+
+def _signed_in_page(name: str, path: str):
+    async def page(request: Request):
+        return _page(name) if request.cookies.get(SESSION_COOKIE) else RedirectResponse(f"/login?next={path}")
+    app.get(path)(page)
+
+
+for _name, _path in (("assistant.html", "/assistant"), ("bookings.html", "/bookings"), ("reminders.html", "/reminders"),
+                     ("settings.html", "/settings")):
+    _signed_in_page(_name, _path)
 
 
 @app.get("/m/{code}")

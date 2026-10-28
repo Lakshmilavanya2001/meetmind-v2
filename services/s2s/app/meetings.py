@@ -213,6 +213,18 @@ async def _close_room(room: str):
         pass
 
 
+async def remove_from_room(room: str, identity: str):
+    """Disconnect one person from a live room (best effort)."""
+    try:
+        lk = api.LiveKitAPI(LIVEKIT_HTTP, API_KEY, API_SECRET)
+        try:
+            await lk.room.remove_participant(api.RoomParticipantIdentity(room=room, identity=identity))
+        finally:
+            await lk.aclose()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/api/meetings/{code}/end")
 async def end(code: str, ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
     m, me = await load(s, ctx, code)

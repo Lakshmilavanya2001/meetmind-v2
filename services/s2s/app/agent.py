@@ -47,6 +47,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from . import bnr
 from .asr import AsrStream
 from .assistant import call as mind
+from .assistant.voice import VoiceAssistant
 from .transcript_store import RoomTranscript
 from .wake import may_become_wake, strip_wake_phrase
 from .languages import HEAR, PROMPT_NAME, SCRIPT, SPEAK
@@ -84,6 +85,7 @@ IN_SR = 16_000                      # what the ASR wants
 OUT_SR = 48_000                     # WebRTC's native rate; the TTS service resamples to it
 OUT_FRAME = OUT_SR // 50            # 20 ms frames into the LiveKit audio source
 CAPTIONS_TOPIC = "captions"
+MIND_FOLLOWUP_S = float(os.environ.get("MIND_FOLLOWUP_S", "20"))   # after Mind asks something, the answer needs no wake phrase
 # "Hey Mind": the assistant's voice, and how long after a bare "Hey Mind" the next utterance is the question.
 ASSISTANT_VOICE = "male" if os.environ.get("S2S_ASSISTANT_VOICE") == "male" else "female"
 WAKE_WINDOW_S = float(os.environ.get("S2S_WAKE_WINDOW_S", "8"))
@@ -766,6 +768,7 @@ class CallTranslator:
         self.private_utts: set[str] = set()
         self.mind_http: aiohttp.ClientSession | None = None
         self.mind_count = 0
+        self.voice = VoiceAssistant(room.name)      # "Hey Mind" through the assistant's agents
         # The saved transcript (only while the meeting's host has "Save transcript" on).
         self.transcript = RoomTranscript(room.name)
         self.saved_lines: dict[str, asyncio.Task] = {}
@@ -980,9 +983,12 @@ class CallTranslator:
         t0 = time.time()
         try:
             if self.mind_http is None:
-                self.mind_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=30))
+                self.mind_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=60))
             people = [c.name for c in self.callers.values()]
-            text = await mind.answer(self.mind_http, question, caller.name, caller.speak, people, self.memory)
+            reply = await self.voice.handle(self.mind_http, ident, caller.name, caller.speak, question, people, self.memory)
+            text = reply.text
+            if reply.expects_answer:                     # "yes" / "no" / the missing detail, without "Hey Mind"
+                self.awake_until[ident] = time.time() + MIND_FOLLOWUP_S
         except Exception:  # noqa: BLE001
             log.exception("assistant answer for %s failed", utt_id)
             text = "Sorry, I couldn't answer that just now." if caller.speak != "hi" else "माफ़ कीजिए, अभी जवाब नहीं दे पाया।"

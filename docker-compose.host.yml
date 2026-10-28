@@ -21,6 +21,7 @@ services:
     environment:
       LIVEKIT_URL: ws://127.0.0.1:7890
       S2S_HEALTH_PORT: "8092"                 # 8081 is taken on this host
+      PUBLIC_URL: https://${PUBLIC_HOST}:8444
       ASR_URL: ${ASR_URL:?set ASR_URL in .env (Parakeet offline, http://host:8001)}
       TRANSLATE_API: ${S2S_TRANSLATE_API:-chat}
       TRANSLATE_URL: ${S2S_TRANSLATE_URL:?set S2S_TRANSLATE_URL in .env (an OpenAI-compatible /v1 URL)}
