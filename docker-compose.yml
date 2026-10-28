@@ -216,6 +216,8 @@ services:
       # detection, for callers who choose it. Empty: the option isn't offered.
       BNR_GRPC_URL: ${BNR_GRPC_URL:-}
       BNR_MAX_STREAMS: ${BNR_MAX_STREAMS:-8}
+      # Saved transcripts (when a meeting's host turns saving on) go to the app's database.
+      DATABASE_URL: postgresql+asyncpg://meetmind:${DB_PASSWORD}@127.0.0.1:${DB_PORT:-5434}/meetmind_v2
     depends_on:
       livekit: {condition: service_started}
       tts: {condition: service_healthy}
@@ -233,6 +235,12 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       BNR_GRPC_URL: ${BNR_GRPC_URL:-}      # only to tell the page whether "Studio" is available
+      # Summaries and answers (a chat LLM) and transcript search (an embedding model), OpenAI-compatible.
+      ASSISTANT_LLM_URL: ${ASSISTANT_LLM_URL:-}
+      ASSISTANT_LLM_MODEL: ${ASSISTANT_LLM_MODEL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-2048}
     depends_on:
       s2s-agent: {condition: service_started}
       db: {condition: service_healthy}

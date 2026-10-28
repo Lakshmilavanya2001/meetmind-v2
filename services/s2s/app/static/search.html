@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Search · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-top">
+  <a class="brand" href="/dashboard">MeetMind</a>
+  <a class="btn ghost small" href="/dashboard">Meetings</a>
+</header>
+<main class="dash">
+  <section class="card">
+    <h2>Ask about your meetings</h2>
+    <p class="hint">Answers come only from the saved transcripts of meetings you took part in, with the lines they're based on.</p>
+    <form id="ask-form" class="row"><div class="field"><label for="question">Question</label><input id="question" maxlength="500" placeholder="When is the Whitefield upgrade report due?"></div>
+      <button class="btn primary" type="submit">Ask</button></form>
+    <div id="answer"></div>
+  </section>
+  <p id="err" class="error" role="alert" hidden></p>
+</main>
+<script src="/common.js"></script>
+<script>
+"use strict";
+$("ask-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const q = $("question").value.trim();
+  if (q.length < 3) return;
+  $("err").hidden = true;
+  $("answer").replaceChildren(el("p", { class: "hint", text: "Looking through your meetings…" }));
+  try { $("answer").replaceChildren(answerView(await api("/api/ask", { question: q }))); }
+  catch (e) { $("answer").replaceChildren(); $("err").textContent = e.message; $("err").hidden = false; }
+});
+</script>
+</body>
+</html>

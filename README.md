@@ -378,7 +378,38 @@ is off unless `ALLOW_ANONYMOUS_ROOMS=1`; the test clients sign up test users ins
 
 API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/members`,
 `POST /api/meetings`, `GET /api/meetings`, `GET /api/meetings/<code>`,
-`POST /api/meetings/<code>/invite|join|end`.
+`POST /api/meetings/<code>/invite|join|end`, `POST /api/meetings/<code>/transcript` (save on/off),
+`GET /api/meetings/<code>/transcript?lang=`, `POST /api/meetings/<code>/summary`, `POST /api/ask`.
+
+**Saved transcripts, summaries and questions** (phase 3, 2026-10-28):
+
+- **Saving is the host's choice.** In a call, the host or a co-host presses **Save transcript**
+  (confirmation; everyone in the call sees "This meeting's transcript is being saved", and can see
+  it stop). While it's on, the call agent saves each finished line (speaker, language, times) and
+  each translation of it (`transcript_store.py`). Questions to Mind are never saved. Without it,
+  nothing is stored.
+- **Who reads it.** Only the meeting's participants (invited or joined, not removed): others in the
+  organisation get 403, other organisations 404. Page: `/meetings/<code>` (transcript as spoken or in
+  English or Hindi, summary, decisions, action items, "Ask about this meeting").
+- **Summary** (`summaries.py`): written by the watchdog after the meeting ends (and again if lines
+  were added), or with **Summarise now**. The LLM gets the lines numbered and returns JSON (guided
+  decoding): a summary, decisions and action items (task, owner, due), each citing line numbers.
+  Items citing no real line are dropped; an owner named in the meeting is matched to a participant.
+- **Search and questions** (`search.py`, `/search` and `POST /api/ask`): lines are cut into chunks of
+  ~900 characters ("[mm:ss] Speaker: text", one line of overlap), embedded with NVIDIA
+  llama-nemotron-embed-1b-v2 (2048 dimensions, `halfvec` + HNSW in Postgres), re-indexed when lines
+  arrive (live meetings at most once a minute). A question searches only chunks of meetings the
+  asker took part in (checked in the SQL), the model must cite excerpts with a copied quote, a
+  citation counts only if its quote is in that excerpt, and the time and speaker come from the
+  matching line. Nothing verified: "The transcripts don't contain enough information".
+- **Measured** (`clients/transcript_test.py`, real models): 9 lines saved with Hindi translations;
+  the summary was ready 6 s after the meeting ended, with both action items; "When is the mobile
+  release?" and "Who will share the customer feedback report, and by when?" were answered correctly,
+  each citing the right line and time. Recognition slips carry through: "Pria will share…" was
+  recognised without "Pria", so the summary credits the speaker.
+- Settings: `ASSISTANT_LLM_URL`/`ASSISTANT_LLM_MODEL` (summaries and answers), `EMBEDDING_BASE_URL`,
+  `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`; the agent gets `DATABASE_URL`. Not done yet: retention
+  (automatic deletion after N days) and deleting a transcript by hand.
 
 **Tests.** Unit and API tests (`services/s2s/tests`, against the `meetmind_v2_test` database):
 

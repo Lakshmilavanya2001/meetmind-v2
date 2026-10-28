@@ -47,6 +47,7 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 from . import bnr
 from .asr import AsrStream
 from .assistant import call as mind
+from .transcript_store import RoomTranscript
 from .wake import may_become_wake, strip_wake_phrase
 from .languages import HEAR, PROMPT_NAME, SCRIPT, SPEAK
 
@@ -765,16 +766,20 @@ class CallTranslator:
         self.private_utts: set[str] = set()
         self.mind_http: aiohttp.ClientSession | None = None
         self.mind_count = 0
+        # The saved transcript (only while the meeting's host has "Save transcript" on).
+        self.transcript = RoomTranscript(room.name)
+        self.saved_lines: dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------ room state
     def humans(self) -> list[rtc.RemoteParticipant]:
         return [p for p in self.room.remote_participants.values()
                 if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT]
 
-    def spawn(self, coro):
+    def spawn(self, coro) -> asyncio.Task:
         t = asyncio.create_task(coro)
         self.tasks.add(t)
         t.add_done_callback(self.tasks.discard)
+        return t
 
     async def reconcile(self):
         """Bring inputs/outputs in line with who is in the room and their attributes."""
@@ -936,12 +941,24 @@ class CallTranslator:
             if not text or echo:
                 return
             self.memory.add(caller.name, caller.speak, text)
+            started = inp.wall_at(m["start_ms"])
+            self.saved_lines[utt_id] = self.spawn(self.transcript.line(
+                utt_id, caller.identity, caller.name, caller.speak, text, started, inp.wall_at(m["end_ms"])))
+            if len(self.saved_lines) > 500:
+                self.saved_lines.pop(next(iter(self.saved_lines)))
             end_ms = m["end_ms"] - (0 if m.get("forced") else SPEECH_PAD_MS)
             utt = Utterance(utt_id, caller.identity, text, inp.wall_at(end_ms), time.time())
             utt.marks["asr_decode_ms"] = m.get("decode_ms")
             await self.queues[caller.identity].put(utt)
         elif kind == "error":
             log.warning("asr error for %s: %s", inp.identity, m.get("message"))
+
+    async def save_translation(self, utt_id: str, lang: str, text: str):
+        line = self.saved_lines.get(utt_id)
+        if line is None:
+            return
+        await asyncio.shield(line)                        # the line itself is written first
+        await self.transcript.translation(utt_id, lang, text)
 
     # ------------------------------------------------------------------ "Hey Mind"
     def awake(self, ident: str) -> bool:
@@ -1017,6 +1034,7 @@ class CallTranslator:
                              "text": text, "final": True, "ms": round((time.time() - t0) * 1000),
                              "route": stats.get("route"), "pivot_text": stats.get("pivot_text")})
             if text:
+                self.spawn(self.save_translation(utt.id, lang, text))
                 self.remember_played(lang, text)
                 playbacks = [self.outputs[c.identity].enqueue(utt) for c in group if c.identity in self.outputs]
                 if playbacks:                                     # one synthesis for the whole group

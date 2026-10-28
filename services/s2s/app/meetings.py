@@ -45,6 +45,7 @@ def meeting_view(m: Meeting, me: MeetingParticipant | None = None, host: User | 
             "scheduledStart": iso(m.scheduled_start), "scheduledEnd": iso(m.scheduled_end),
             "startedAt": iso(m.started_at), "endedAt": iso(m.ended_at),
             "host": {"id": str(host.id), "displayName": host.display_name} if host else {"id": str(m.host_id)},
+            "saveTranscript": m.save_transcript,
             "myRole": me.role if me and not me.removed_at else None}
 
 

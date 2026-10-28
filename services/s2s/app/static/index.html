@@ -85,6 +85,7 @@
 
 <!-- ============================================================ call -->
 <main id="call" class="call" hidden>
+  <p id="save-banner" class="save-banner" role="status" hidden>This meeting's transcript is being saved.</p>
   <header class="topbar">
     <div class="room-info">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
@@ -129,6 +130,12 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4 12.3-4 17 0l-1.6 2.6-3.4-1.2v-2.4c-2.4-.8-4.6-.8-7 0v2.4l-3.4 1.2z"/></svg>
       </span>
       <span class="ctrl-label">Leave</span>
+    </button>
+    <button id="save-toggle" class="ctrl" type="button" aria-pressed="false" hidden>
+      <span class="ctrl-icon">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="9"/></svg>
+      </span>
+      <span class="ctrl-label" id="save-label">Save transcript</span>
     </button>
     <button id="end-all" class="ctrl danger" type="button" hidden>
       <span class="ctrl-icon">

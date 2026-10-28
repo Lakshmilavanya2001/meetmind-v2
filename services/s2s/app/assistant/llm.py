@@ -17,12 +17,15 @@ def configured() -> bool:
 
 
 async def chat(http: aiohttp.ClientSession, messages: list[dict], *, max_tokens: int = 300, temperature: float = 0.3,
-               tools: list[dict] | None = None) -> dict:
-    """One chat completion; returns the assistant message ({content, tool_calls?})."""
+               tools: list[dict] | None = None, json_schema: dict | None = None) -> dict:
+    """One chat completion; returns the assistant message ({content, tool_calls?}). With `json_schema`,
+    the reply is JSON matching it (vLLM's guided decoding)."""
     body = {"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature,
             "chat_template_kwargs": {"enable_thinking": False}}
     if tools:
         body["tools"] = tools
+    if json_schema:
+        body["response_format"] = {"type": "json_schema", "json_schema": {"name": json_schema.get("title", "reply"), "schema": json_schema}}
     headers = {"Authorization": f"Bearer {LLM_KEY}"} if LLM_KEY else {}
     async with http.post(f"{LLM_URL}/chat/completions", json=body, headers=headers) as r:
         if r.status != 200:

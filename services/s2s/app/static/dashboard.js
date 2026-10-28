@@ -41,6 +41,13 @@ function renderMeetings(list) {
     badge.className = "badge" + (m.status === "LIVE" ? " live" : "");
     badge.textContent = m.status.toLowerCase();
     right.append(badge);
+    if (m.status !== "SCHEDULED" && m.status !== "CANCELLED") {
+      const t = document.createElement("a");
+      t.className = "btn ghost small";
+      t.href = `/meetings/${m.joinCode}`;
+      t.textContent = "Transcript";
+      right.append(t);
+    }
     if (m.status === "LIVE" || m.status === "SCHEDULED") {
       const a = document.createElement("a");
       a.className = "btn primary small";

@@ -53,10 +53,26 @@ test("meetmind-v2: sign up, organisation, start and join a meeting, end for all"
     await expect(b.locator("#people")).toContainText("Asha Rao");
     await expect(a.locator("#translator")).not.toContainText("joining", { timeout: 20_000 });
 
+    // Saving the transcript: only the host has the switch; everyone sees the notice.
+    await expect(b.locator("#save-toggle")).toBeHidden();
+    await expect(b.locator("#save-banner")).toBeHidden();
+    a.once("dialog", (d) => d.accept());
+    await a.locator("#save-toggle").click();
+    await expect(a.locator("#save-banner")).toBeVisible();
+    await expect(a.locator("#save-label")).toHaveText("Stop saving");
+    await expect(b.locator("#save-banner")).toBeVisible({ timeout: 15_000 });
+    const meetingCode = link.split("/m/")[1];
+
     a.once("dialog", (d) => d.accept());
     await a.locator("#end-all").click();
     await expect(a).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
     await expect(a.locator("#meetings")).toContainText("ended");
+    // The transcript page: participants only; nothing was said, so nothing saved.
+    await a.getByRole("link", { name: "Transcript" }).first().click();
+    await expect(a).toHaveURL(new RegExp(`/meetings/${meetingCode}$`));
+    await expect(a.locator("#title")).toHaveText("Launch sync");
+    await expect(a.locator("#lines")).toContainText("Nothing saved");
+    await expect(a.locator("#summary")).toContainText("No summary yet");
     await b.waitForTimeout(3000);
     await expect(b).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
     await expect(b.getByRole("status")).toHaveText("The host ended the meeting.");

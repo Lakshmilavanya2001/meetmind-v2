@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Transcript · MeetMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-top">
+  <a class="brand" href="/dashboard">MeetMind</a>
+  <span class="row"><a class="btn ghost small" href="/search">Search</a><a class="btn ghost small" href="/dashboard">Meetings</a></span>
+</header>
+<main class="dash">
+  <section class="card">
+    <h2 id="title">Transcript</h2>
+    <p class="meta" id="meta"></p>
+  </section>
+  <section class="card" aria-labelledby="sum-h">
+    <div class="row" style="justify-content:space-between"><h2 id="sum-h">Summary</h2>
+      <button id="summarise" class="btn ghost small" type="button">Summarise now</button></div>
+    <div id="summary"><p class="hint">No summary yet.</p></div>
+  </section>
+  <section class="card" aria-labelledby="ask-h">
+    <h2 id="ask-h">Ask about this meeting</h2>
+    <form id="ask-form" class="row"><div class="field"><label for="question">Question</label><input id="question" maxlength="500" placeholder="What did we decide about the launch date?"></div>
+      <button class="btn primary" type="submit">Ask</button></form>
+    <div id="answer"></div>
+  </section>
+  <section class="card" aria-labelledby="tr-h">
+    <div class="row" style="justify-content:space-between"><h2 id="tr-h">Transcript</h2>
+      <label class="row" style="gap:6px;font-size:14px">Show <select id="lang"><option value="">as spoken</option><option value="en">in English</option><option value="hi">in Hindi</option></select></label></div>
+    <ol class="lines" id="lines"><li class="meta">Loading…</li></ol>
+  </section>
+  <p id="err" class="error" role="alert" hidden></p>
+</main>
+<script src="/common.js"></script>
+<script src="/transcript.js"></script>
+</body>
+</html>

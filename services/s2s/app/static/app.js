@@ -249,6 +249,8 @@ async function join(ev) {
     if (!state.meeting) history.replaceState(null, "", `?room=${encodeURIComponent(roomName)}`);
     $("room-name").textContent = state.meeting ? state.meeting.title : roomName;
     $("end-all").hidden = !(state.meeting && ["HOST", "COHOST"].includes(state.meeting.myRole));
+    $("save-toggle").hidden = $("end-all").hidden;
+    if (state.meeting) watchMeeting();
     syncSettingsForm();
     $("join").hidden = true;
     $("call").hidden = false;
@@ -837,6 +839,39 @@ async function loadMeeting() {
   if (myPreferences?.voice) setRadio("voice", myPreferences.voice);
   if (meeting.status === "ENDED" || meeting.status === "CANCELLED") $("join-btn").disabled = true;
 }
+
+// "Save transcript": the host's switch, and a notice for everyone while it's on (re-read every 8 s).
+function showSaving(on) {
+  state.meeting.saving = on;
+  $("save-banner").hidden = !on;
+  $("save-toggle").setAttribute("aria-pressed", String(on));
+  $("save-label").textContent = on ? "Stop saving" : "Save transcript";
+}
+async function watchMeeting() {
+  clearInterval(state.meetingTimer);
+  const check = async () => {
+    if (!state.room || !state.meeting) return clearInterval(state.meetingTimer);
+    const r = await fetch(`/api/meetings/${state.meeting.code}`).catch(() => null);
+    if (r?.ok) {
+      const on = !!(await r.json()).meeting.saveTranscript;
+      if (on !== state.meeting.saving) {
+        if (on) toast("The host is saving this meeting's transcript.", { key: "saving" });
+        showSaving(on);
+      }
+    }
+  };
+  state.meeting.saving = undefined;
+  await check();
+  state.meetingTimer = setInterval(check, 8000);
+}
+$("save-toggle").addEventListener("click", async () => {
+  const on = !state.meeting.saving;
+  if (on && !confirm("Save this meeting's transcript? Everyone in the call will be told.")) return;
+  const r = await fetch(`/api/meetings/${state.meeting.code}/transcript`, { method: "POST", headers: { "content-type": "application/json" },
+                                                                        body: JSON.stringify({ enabled: on }) });
+  if (!r.ok) { toast((await r.json().catch(() => ({}))).detail || "Couldn't change it"); return; }
+  showSaving((await r.json()).saveTranscript);
+});
 
 $("end-all").addEventListener("click", async () => {
   if (!state.meeting || !confirm("End the meeting for everyone?")) return;

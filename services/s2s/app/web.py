@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+
+import aiohttp
 import logging
 import os
 import re
@@ -26,6 +28,8 @@ from .accounts import router as accounts_router
 from .languages import HEAR, SPEAK, describe
 from .meetings import end_abandoned
 from .meetings import router as meetings_router
+from . import transcripts
+from .transcripts import router as transcripts_router
 from .security import SESSION_COOKIE
 
 API_KEY = os.environ["LIVEKIT_API_KEY"]
@@ -53,6 +57,7 @@ async def lifespan(_app):
 app = FastAPI(title="MeetMind v2", lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(meetings_router)
+app.include_router(transcripts_router)
 # The original open demo (anyone with a room name joins, no account) only when asked for.
 ALLOW_ANONYMOUS_ROOMS = os.environ.get("ALLOW_ANONYMOUS_ROOMS", "0") == "1"
 
@@ -94,12 +99,15 @@ async def translator_watchdog():
             for name in list(dispatched_at):
                 if name not in {r.name for r in rooms}:
                     dispatched_at.pop(name)
-            # Meetings whose room has been empty and closed for a while are over.
+            # Meetings whose room has been empty and closed for a while are over; ended meetings get
+            # their summary, and new transcript lines their search index.
             if os.environ.get("DATABASE_URL"):
                 async with db.sessionmaker()() as s:
                     n = await end_abandoned(s, {r.name for r in rooms})
                     if n:
                         log.info("ended %d meeting(s) whose room had closed", n)
+                async with db.sessionmaker()() as s, aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=60)) as http:
+                    await transcripts.background(s, http)
         except Exception as e:  # noqa: BLE001 - keep watching
             log.warning("translator watchdog: %s", e)
 
@@ -178,6 +186,18 @@ async def signup_page():
 @app.get("/dashboard")
 async def dashboard_page(request: Request):
     return _page("dashboard.html") if request.cookies.get(SESSION_COOKIE) else RedirectResponse("/login")
+
+
+@app.get("/meetings/{code}")
+async def transcript_page(code: str, request: Request):
+    if not request.cookies.get(SESSION_COOKIE):
+        return RedirectResponse(f"/login?next=/meetings/{code}")
+    return _page("transcript.html")
+
+
+@app.get("/search")
+async def search_page(request: Request):
+    return _page("search.html") if request.cookies.get(SESSION_COOKIE) else RedirectResponse("/login?next=/search")
 
 
 @app.get("/m/{code}")
