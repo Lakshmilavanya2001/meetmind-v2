@@ -33,11 +33,6 @@ const store = {
 };
 
 const langName = (code) => state.names[code] || code || "?";
-const radioValue = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value || "female";
-const setRadio = (name, value) => {
-  const r = document.querySelector(`input[name="${name}"][value="${value}"]`);
-  if (r) r.checked = true;
-};
 
 // ------------------------------------------------------------------ dialogs (invoker commands fallback)
 // Native `command`/`commandfor` buttons open and close the settings dialog; older
@@ -161,7 +156,8 @@ async function loadLanguages() {
   fillSelect($("hear"), state.langs.hear, store.get("hear", speak));
   fillSelect($("speak-live"), state.langs.speak);
   fillSelect($("hear-live"), state.langs.hear);
-  setRadio("voice", store.get("voice", "female"));
+  await loadVoices();
+  fillVoicePicker("", store.get("voice", "Louise"));
   // "Studio" (NVIDIA BNR in the agent) is offered only when the server has it.
   state.studio = !!state.langs.noise?.studio;
   for (const sel of [$("noise"), $("noise-live")]) sel.querySelector('option[value="studio"]').hidden = !state.studio;
@@ -220,7 +216,7 @@ async function join(ev) {
   btn.textContent = "Joining...";
   $("join-error").hidden = true;
   const req = { name: $("name").value.trim(), room: $("room").value.trim(),
-                speak: $("speak").value, hear: $("hear").value, voice: radioValue("voice"), noise: $("noise").value };
+                speak: $("speak").value, hear: $("hear").value, voice: pickedVoice(""), noise: $("noise").value };
   const micId = state.testMic ? $("mic-device").value : store.get("mic", "");
   for (const k of ["name", "room", "speak", "hear", "voice", "noise"]) store.set(k, req[k]);
   if (micId) store.set("mic", micId);
@@ -645,22 +641,115 @@ function onTranslationLevel(v) {
   }
 }
 
+// ------------------------------------------------------------------ voice and tone
+// A speaker's voice is a Magpie voice, optionally with a tone ("Sofia.Calm"); listeners hear the
+// nearest their language has. Without an account (open demo) or a voice list, Louise and Leo.
+const TONE_LABEL = { PleasantSurprised: "Pleasantly surprised" };
+const LEGACY_VOICE = { female: "Louise", male: "Leo" };
+function voiceLabel(id) {
+  const [speaker, tone] = (LEGACY_VOICE[id] || id || "Louise").split(".");
+  return tone ? `${speaker} · ${TONE_LABEL[tone] || tone}` : speaker;
+}
+async function loadVoices() {
+  let list = [];
+  try {
+    const r = await fetch(`/api/voices?lang=${encodeURIComponent(store.get("speak", "en"))}`);
+    if (r.ok) ({ voices: list, languages: state.voiceLangs } = await r.json());
+  } catch { /* fall back below */ }
+  if (!list.length) list = [{ id: "Louise", speaker: "Louise", tone: null }, { id: "Leo", speaker: "Leo", tone: null }];
+  state.voices = new Map();                      // speaker -> [{id, tone}], the plain voice first
+  for (const v of list) {
+    if (!state.voices.has(v.speaker)) state.voices.set(v.speaker, []);
+    state.voices.get(v.speaker).push(v);
+  }
+  for (const opts of state.voices.values()) opts.sort((a, b) => (a.tone === null ? -1 : b.tone === null ? 1 : 0));
+}
+function fillTones(suffix, speaker, id) {
+  const opts = state.voices.get(speaker) || [];
+  $(`tone${suffix}`).replaceChildren(...opts.map((v) => {
+    const o = document.createElement("option");
+    o.value = v.id;
+    o.textContent = v.tone ? (TONE_LABEL[v.tone] || v.tone) : "Standard";
+    return o;
+  }));
+  if (id && opts.some((v) => v.id === id)) $(`tone${suffix}`).value = id;
+  $(`tone${suffix}`).disabled = opts.length < 2;
+  showHeard(suffix);
+}
+function fillVoicePicker(suffix, id) {
+  id = LEGACY_VOICE[id] || id || "Louise";
+  let speaker = id.split(".")[0];
+  if (!state.voices.has(speaker)) { speaker = state.voices.has("Louise") ? "Louise" : state.voices.keys().next().value; id = speaker; }
+  $(`voice${suffix}`).replaceChildren(...[...state.voices.keys()].map((sp) => {
+    const o = document.createElement("option");
+    o.value = sp;
+    o.textContent = sp + (state.voices.get(sp).length > 1 ? ` (${state.voices.get(sp).length - 1} tones)` : "");
+    return o;
+  }));
+  $(`voice${suffix}`).value = speaker;
+  fillTones(suffix, speaker, id);
+}
+// What listeners of each language hear for a choice (as the server picks it: tone, else voice, else Louise).
+function heardIn(lang, id) {
+  const ids = state.voiceLangs?.[lang];
+  if (!ids?.length) return id;
+  if (ids.includes(id)) return id;
+  const speaker = id.split(".")[0];
+  return ids.includes(speaker) ? speaker : (ids.includes("Louise") ? "Louise" : ids[0]);
+}
+function showHeard(suffix) {
+  const out = $(`voice-heard${suffix}`);
+  if (!out || !state.voiceLangs) return;
+  const id = pickedVoice(suffix);
+  out.textContent = "Heard as: " + Object.keys(state.voiceLangs).map((l) => `${langName(l)} ${voiceLabel(heardIn(l, id))}`).join(" · ");
+}
+function pickedVoice(suffix) {
+  return $(`tone${suffix}`).value || $(`voice${suffix}`).value || "Louise";
+}
+async function previewVoice(voice, lang, btn) {
+  if (state.sample) { state.sample.pause(); state.sample = null; btn.textContent = "Play a sample"; return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/voices/preview", { method: "POST", headers: { "content-type": "application/json" },
+                                                   body: JSON.stringify({ voice, lang: lang === "hi" ? "hi" : "en" }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Sample not available");
+    const url = URL.createObjectURL(await r.blob());
+    const a = new Audio(url);
+    state.sample = a;
+    btn.textContent = "Stop sample";
+    a.onended = () => { URL.revokeObjectURL(url); state.sample = null; btn.textContent = "Play a sample"; };
+    await a.play();
+  } catch (e) {
+    toast(`Couldn't play the sample: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+// Changes made in the call are remembered for this meeting (accounts only).
+function savePreferences(prefs) {
+  if (!state.meeting) return;
+  fetch(`/api/meetings/${state.meeting.code}/preferences`, { method: "PATCH", headers: { "content-type": "application/json" },
+                                                             body: JSON.stringify(prefs) }).catch(() => {});
+}
+
 // ------------------------------------------------------------------ settings
 function syncSettingsForm() {
   $("noise-live").value = state.me.noise;
   $("speak-live").value = state.me.speak;
   $("hear-live").value = state.me.hear;
-  setRadio("voice-live", state.me.voice);
+  fillVoicePicker("-live", state.me.voice);
 }
 
 async function updateAttributes() {
   if (!state.room) return;
-  const attrs = { speak: $("speak-live").value, hear: $("hear-live").value, voice: radioValue("voice-live") };
+  const attrs = { speak: $("speak-live").value, hear: $("hear-live").value, voice: pickedVoice("-live") };
+  const voiceChanged = attrs.voice !== state.me.voice;
   Object.assign(state.me, attrs);
   for (const k of ["speak", "hear", "voice"]) store.set(k, attrs[k]);
   await state.room.localParticipant.setAttributes(attrs);
+  savePreferences(attrs);
   renderPeople();
-  toast(`You speak ${langName(attrs.speak)} and hear ${langName(attrs.hear)}.`, { key: "langs" });
+  toast(voiceChanged ? `Others will hear you as ${voiceLabel(attrs.voice)}.` : `You speak ${langName(attrs.speak)} and hear ${langName(attrs.hear)}.`, { key: "langs" });
 }
 
 async function refreshDevices() {
@@ -758,6 +847,7 @@ async function changeNoise() {
   store.set("noise", mode);
   await applyNoise(mode);
   await state.room?.localParticipant.setAttributes({ noise: mode });   // the agent switches BNR on or off
+  savePreferences({ noise: mode });
   const label = $("noise-live").selectedOptions[0]?.textContent.split(" (")[0] ?? mode;
   toast(`Background noise removal: ${label}.`, { key: "noise" });
 }
@@ -774,7 +864,12 @@ $("hear").addEventListener("change", () => { state.hearTouched = true; });
 $("speak-live").addEventListener("change", updateAttributes);
 $("noise-live").addEventListener("change", changeNoise);
 $("hear-live").addEventListener("change", updateAttributes);
-document.querySelectorAll('input[name="voice-live"]').forEach((r) => r.addEventListener("change", updateAttributes));
+$("voice-live").addEventListener("change", () => { fillTones("-live", $("voice-live").value); updateAttributes(); });
+$("tone-live").addEventListener("change", () => { showHeard("-live"); updateAttributes(); });
+$("tone").addEventListener("change", () => showHeard(""));
+$("voice").addEventListener("change", () => fillTones("", $("voice").value));
+$("voice-preview").addEventListener("click", (e) => previewVoice(pickedVoice(""), $("speak").value, e.currentTarget));
+$("voice-preview-live").addEventListener("click", (e) => previewVoice(pickedVoice("-live"), state.me?.speak, e.currentTarget));
 $("mic-live").addEventListener("change", (e) => switchDevice("audioinput", e.target.value));
 $("speaker-live").addEventListener("change", (e) => switchDevice("audiooutput", e.target.value));
 document.querySelector('button[commandfor="settings"][command="show-modal"]').addEventListener("click", refreshDevices);
@@ -836,7 +931,7 @@ async function loadMeeting() {
   fill("speak", pref("speak", me.user.preferredLanguage));
   fill("hear", pref("hear", $("speak").value));
   fill("noise", pref("noise", $("noise").value));
-  if (myPreferences?.voice) setRadio("voice", myPreferences.voice);
+  if (myPreferences?.voice) fillVoicePicker("", myPreferences.voice);
   if (meeting.status === "ENDED" || meeting.status === "CANCELLED") $("join-btn").disabled = true;
 }
 

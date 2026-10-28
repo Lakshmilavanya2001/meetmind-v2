@@ -13,16 +13,19 @@ import secrets
 import string
 from datetime import datetime, timedelta, timezone
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from livekit import api
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import bnr
+from . import bnr, voices
 from .accounts import Ctx, audit, current, get_db
 from .languages import HEAR, SPEAK
 from .models import Meeting, MeetingParticipant, Membership, User
+from .security import rate_limit
 
 router = APIRouter()
 API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
@@ -164,8 +167,61 @@ async def invite(code: str, body: InviteIn, ctx: Ctx = Depends(current), s: Asyn
 class JoinIn(BaseModel):
     speak: str
     hear: str
-    voice: str = "female"
+    voice: str = voices.DEFAULT_VOICE         # a Magpie voice, optionally with a tone ("Sofia.Calm")
     noise: str = "standard"
+
+
+async def _voice(choice: str | None) -> str:
+    """The voice to store: one Magpie offers (or any well-formed one while its list can't be read)."""
+    v = voices.normalise(choice)
+    if v is None:
+        raise HTTPException(400, "That voice isn't available.")
+    offered = {x["id"] for x in voices.all_voices(await voices.catalog())}
+    if offered and v not in offered:
+        raise HTTPException(400, "That voice isn't available.")
+    return v
+
+
+@router.get("/api/voices")
+async def list_voices(lang: str = "en", ctx: Ctx = Depends(current)):
+    """The voices and tones a speaker can be heard in (each listener hears the nearest their language has)."""
+    by_lang = await voices.catalog()
+    return {"voices": voices.all_voices(by_lang, lang), "default": voices.DEFAULT_VOICE,
+            "languages": {l: [v["id"] for v in vs] for l, vs in by_lang.items()}}
+
+
+PREVIEW_TEXT = {"en": "Hello! This is how the others will hear your translated speech.",
+                "hi": "नमस्ते! दूसरे लोग आपकी अनुवादित बात इसी आवाज़ में सुनेंगे।"}
+
+
+class PreviewIn(BaseModel):
+    voice: str
+    lang: str = "en"
+
+
+@router.post("/api/voices/preview")
+async def preview_voice(body: PreviewIn, ctx: Ctx = Depends(current)):
+    """A short sample of a voice (WAV), in the given call language."""
+    rate_limit(f"voice-preview:{ctx.user.id}", 30, 600)
+    if body.lang not in voices.MAGPIE_LOCALE or not voices.MAGPIE_TTS_URL:
+        raise HTTPException(404, "Voice samples aren't available.")
+    voice = await _voice(body.voice)
+    by_lang = await voices.catalog()
+    form = aiohttp.FormData()
+    form.add_field("language", voices.MAGPIE_LOCALE[body.lang])
+    form.add_field("text", PREVIEW_TEXT[body.lang])
+    form.add_field("voice", voices.magpie_name(by_lang, body.lang, voice))
+    form.add_field("sample_rate_hz", "22050")
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as http:
+            async with http.post(f"{voices.MAGPIE_TTS_URL}/audio/synthesize", data=form) as r:
+                if r.status != 200:
+                    raise HTTPException(502, "The voice service couldn't make a sample right now.")
+                audio = await r.read()
+    except aiohttp.ClientError:
+        raise HTTPException(502, "The voice service couldn't make a sample right now.") from None
+    return Response(audio, media_type="audio/wav", headers={"cache-control": "no-store",
+                                                             "x-voice": voices.voice_in(by_lang, body.lang, voice)})
 
 
 @router.post("/api/meetings/{code}/join")
@@ -183,7 +239,7 @@ async def join(code: str, body: JoinIn, ctx: Ctx = Depends(current), s: AsyncSes
     me.first_joined_at = me.first_joined_at or now
     me.last_joined_at = now
     noise = body.noise if body.noise in NOISE_MODES and (body.noise != "studio" or bnr.available()) else "standard"
-    me.speak, me.hear, me.voice, me.noise = body.speak, body.hear, "male" if body.voice == "male" else "female", noise
+    me.speak, me.hear, me.voice, me.noise = body.speak, body.hear, await _voice(body.voice), noise
     if m.status == "SCHEDULED":
         m.status, m.started_at = "LIVE", now
     await audit(s, "meeting.join", ctx.org.id, ctx.user.id, "Meeting", m.id)
@@ -199,6 +255,32 @@ async def join(code: str, body: JoinIn, ctx: Ctx = Depends(current), s: AsyncSes
            .with_room_config(api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=AGENT_NAME)]))
            .to_jwt())
     return {"token": jwt, "identity": str(ctx.user.id), "room": m.room_name, "meeting": meeting_view(m, me, None)}
+
+
+class PreferencesIn(BaseModel):
+    speak: str | None = None
+    hear: str | None = None
+    voice: str | None = None
+    noise: str | None = None
+
+
+@router.patch("/api/meetings/{code}/preferences")
+async def save_preferences(code: str, body: PreferencesIn, ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
+    """Changes made during a call (languages, voice, noise), remembered for the next time I join."""
+    m, me = await load(s, ctx, code)
+    if me is None:
+        raise HTTPException(403, "Join the meeting first.")
+    if body.speak is not None and body.speak not in SPEAK or body.hear is not None and body.hear not in HEAR:
+        raise HTTPException(400, "That language isn't available in calls.")
+    if body.noise is not None and body.noise not in NOISE_MODES:
+        raise HTTPException(400, "Unknown noise mode.")
+    for k in ("speak", "hear", "noise"):
+        if getattr(body, k) is not None:
+            setattr(me, k, getattr(body, k))
+    if body.voice is not None:
+        me.voice = await _voice(body.voice)
+    await s.commit()
+    return {"myPreferences": {k: getattr(me, k) for k in ("speak", "hear", "voice", "noise")}}
 
 
 async def _close_room(room: str):

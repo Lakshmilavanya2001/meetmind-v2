@@ -6,7 +6,7 @@ repo started from, plus MeetMind's accounts, meetings and agents, ported to Pyth
 
 | | |
 |---|---|
-| **Calls** | live speech-to-speech translation (Parakeet → Qwen → Magpie), live captions, echo protection, noise removal (browser RNNoise or NVIDIA BNR "Studio") |
+| **Calls** | live speech-to-speech translation (Parakeet → Qwen → Magpie), live captions, echo protection, noise removal (browser RNNoise or NVIDIA BNR "Studio"), your own voice and tone (Magpie's catalogue, with a sample) |
 | **Accounts** | organisations with join codes, sign-in sessions, meetings (start now, schedule, invite, end for all) |
 | **Transcripts** | saved only when the host turns it on; summaries with decisions and action items; questions answered with verified citations; retention and delete |
 | **Assistant** | chat page and "Hey Mind" in calls; agents for meetings, knowledge, food, cabs/Uber, tables, movies, reminders (SMS), and a planner; every change waits for Confirm |
@@ -51,7 +51,7 @@ Restore instructions are in the script; a restore was tested on 2026-10-28. Run 
   and deletes old read notifications;
 - `TRANSCRIPT_RETENTION_DAYS` deletes saved transcripts that many days after a meeting ends;
 - hosts can delete a meeting's transcript;
-- CI (`.github/workflows/ci.yml`) runs lint, the 127 tests against a throwaway Postgres, and the
+- CI (`.github/workflows/ci.yml`) runs lint, the 140 tests against a throwaway Postgres, and the
   page script checks on every push.
 
 **Not done:** a load test of concurrent calls (the model servers are shared with MeetMind, so a
@@ -478,6 +478,21 @@ API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/me
   `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`; the agent gets `DATABASE_URL`. Retention: `TRANSCRIPT_RETENTION_DAYS`
   (phase 5); the host or a co-host can **Delete transcript** on the transcript page.
 
+**Your voice and tone** (2026-10-28, ported from meetmind). Each speaker chooses the voice everyone hears
+their translated words in, before joining or in the call's settings, with **Play a sample**. The list comes
+from Magpie (`GET /audio/list_voices`, cached 10 minutes): 37 voices for English and Hindi. Tones (Neutral,
+Calm, Angry, Sad, Happy, Fearful) exist only in English. Each listener hears the nearest match their
+language has (`app/voices.py`):
+
+- the voice with the tone;
+- else the same voice without the tone;
+- else Louise. For example, Mia · Calm is heard as Louise in Hindi.
+
+The page shows what each language hears. Changes made in a call are remembered for that meeting
+(`PATCH /api/meetings/<code>/preferences`). The old "female" / "male" choices mean Louise / Leo.
+
+Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 30 per user per 10 minutes).
+
 **The assistant: agents and tools** (phase 4, 2026-10-28). A port of meetmind's agents to Python
 (`services/s2s/app/assistant/`). Page: **Assistant** (`/assistant`); in a call, say **"Hey Mind …"**.
 
@@ -545,7 +560,7 @@ event per line: `conversation`, `handoff`, `tool_start`, `tool_end`, `confirmati
 `GET /api/bookings`, `POST /api/bookings/<id>/cancel`, `/api/rides[/<id>[/cancel|advance]]`, `/api/reminders`, `/api/notifications`,
 `/api/profile/phone|sms`, `/api/integrations/uber/*`.
 
-**Tests.** 127 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
+**Tests.** 140 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
 
 ```bash
 docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmind:<DB_PASSWORD>@127.0.0.1:5434/meetmind_v2_test \
@@ -554,7 +569,8 @@ docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmin
 
 Browser tests of the pages (`clients/e2e/accounts.spec.mjs`: sign up, join code, start and join a
 meeting, end for all; `assistant.spec.mjs`: the assistant schedules a meeting only after Confirm,
-with the real model):
+with the real model; `pages.spec.mjs`: every page under the security headers; `voices.spec.mjs`: the voice
+and tone picker, a sample, joining with it and changing it in the call):
 
 ```bash
 docker run --rm --network host --ipc=host -v $PWD/clients/e2e:/e2e -w /e2e mcr.microsoft.com/playwright:v1.64.0-noble \

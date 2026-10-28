@@ -19,7 +19,7 @@ def trimmed(clip):
 
 async def main(a):
     room = f"en-hi-{int(time.time())}"
-    A, B = Caller("Asha", "hi", "hi", "female"), Caller("Ben", "en", "en", "male")
+    A, B = Caller("Asha", "hi", "hi", a.voice_a), Caller("Ben", "en", "en", a.voice_b)
     for p in (A, B):
         await p.join(a.url, a.api, room)
     assert await wait_for(lambda: any(len(m.get("callers", [])) == 2 for m in A.msgs("status")), 20), \
@@ -40,4 +40,6 @@ if __name__ == "__main__":
     p.add_argument("--api", default="http://127.0.0.1:8090")
     p.add_argument("--hindi", default="/td/sample_hindi.wav")
     p.add_argument("--english", default="/td/english_16k.wav")
+    p.add_argument("--voice-a", default="female", help='Asha\'s voice, e.g. "Jason.Happy"')
+    p.add_argument("--voice-b", default="male", help='Ben\'s voice, e.g. "Mia.Calm"')
     asyncio.run(main(p.parse_args()))

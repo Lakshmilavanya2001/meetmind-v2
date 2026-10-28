@@ -52,12 +52,13 @@
         <select id="hear"></select>
       </div>
     </div>
-    <fieldset class="field segmented" aria-describedby="voice-hint">
-      <legend>My voice, as the other person hears it</legend>
-      <label><input type="radio" name="voice" value="female" checked><span>Female</span></label>
-      <label><input type="radio" name="voice" value="male"><span>Male</span></label>
-    </fieldset>
-    <p id="voice-hint" class="hint">Your words are spoken to them by a studio voice in their language.</p>
+    <div class="field-grid voice-pick">
+      <div class="field"><label for="voice">My voice, as others hear it</label><select id="voice" aria-describedby="voice-hint"></select></div>
+      <div class="field"><label for="tone">Tone</label><select id="tone"></select></div>
+    </div>
+    <p id="voice-hint" class="hint">Everyone hears your translated words in this voice, in their language. If their language
+      doesn't have the tone, they hear the same voice without it. <button id="voice-preview" type="button" class="btn ghost small">Play a sample</button></p>
+    <p id="voice-heard" class="hint" aria-live="polite"></p>
     <div class="field">
       <label for="noise">Background noise removal</label>
       <select id="noise">
@@ -161,11 +162,12 @@
       <div class="field"><label for="speak-live">My language</label><select id="speak-live"></select></div>
       <div class="field"><label for="hear-live">Hear the other person in</label><select id="hear-live"></select></div>
     </div>
-    <fieldset class="field segmented">
-      <legend>My voice, as the other person hears it</legend>
-      <label><input type="radio" name="voice-live" value="female"><span>Female</span></label>
-      <label><input type="radio" name="voice-live" value="male"><span>Male</span></label>
-    </fieldset>
+    <div class="field-grid voice-pick">
+      <div class="field"><label for="voice-live">My voice, as others hear it</label><select id="voice-live"></select></div>
+      <div class="field"><label for="tone-live">Tone</label><select id="tone-live"></select></div>
+    </div>
+    <p class="hint"><button id="voice-preview-live" type="button" class="btn ghost small">Play a sample</button></p>
+    <p id="voice-heard-live" class="hint" aria-live="polite"></p>
     <p class="hint">Changes apply from your next sentence.</p>
 
     <h3>Audio</h3>

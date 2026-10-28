@@ -4,7 +4,8 @@ between the people in it. Other rooms on the same LiveKit server (meetmind's) ar
 
 Each caller sets three participant attributes (the demo page does this):
 ``speak`` (the language they talk in), ``hear`` (the language they want to hear)
-and ``voice`` (female | male, the voice their translated speech is read in).
+and ``voice`` (a Magpie voice, optionally with a tone, e.g. "Sofia.Calm": the voice their
+translated speech is read in; the old "female" / "male" mean Louise / Leo).
 
 For every caller (as a speaker)
     mic track -> VAD (here) -> each utterance to the ASR NIM (partial + final transcripts)
@@ -48,6 +49,7 @@ from . import bnr
 from .asr import AsrStream
 from .assistant import call as mind
 from .assistant.voice import VoiceAssistant
+from . import voices
 from .transcript_store import RoomTranscript
 from .wake import may_become_wake, strip_wake_phrase
 from .languages import HEAR, PROMPT_NAME, SCRIPT, SPEAK
@@ -65,7 +67,6 @@ TRANSLATE_API = os.environ.get("TRANSLATE_API", "openai")
 TTS_API = os.environ.get("TTS_API", "indic-speak")
 MAGPIE_TTS_URL = os.environ.get("MAGPIE_TTS_URL", "http://127.0.0.1:9000/v1").rstrip("/")
 MAGPIE_LOCALE = {"en": "en-US", "hi": "hi-IN"}            # the call languages Magpie voices
-MAGPIE_VOICE = {"female": os.environ.get("MAGPIE_FEMALE_VOICE", "Louise"), "male": os.environ.get("MAGPIE_MALE_VOICE", "Leo")}
 ASR_PARTIALS = os.environ.get("S2S_ASR_PARTIALS", "1") == "1"
 VAD_MIN_SILENCE_MS = int(os.environ.get("S2S_VAD_MIN_SILENCE_MS", "500"))
 # Echo protection. A browser cancels echo from its own speaker only. Two devices in one
@@ -116,7 +117,7 @@ class Caller:
         a = p.attributes
         speak = a.get("speak", "hi") if a.get("speak") in SPEAK else "hi"
         hear = a.get("hear", speak) if a.get("hear") in HEAR else speak
-        voice = "male" if a.get("voice") == "male" else "female"
+        voice = voices.normalise(a.get("voice")) or voices.DEFAULT_VOICE   # a Magpie voice, maybe with a tone
         noise = a.get("noise") if a.get("noise") in ("off", "standard", "enhanced", "studio") else "standard"
         return Caller(p.identity, p.name or p.identity, speak, hear, voice, noise)
 
@@ -560,7 +561,8 @@ class Synthesizer:
         finished = False
         try:
             await ws.send(json.dumps({"type": "synthesize", "id": utt.id, "text": text, "language": lang,
-                                      "gender": voice, "sample_rate": OUT_SR, "format": "pcm_s16le"}))
+                                      "gender": "male" if voice in ("male", voices.LEGACY["male"]) else "female",
+                                      "sample_rate": OUT_SR, "format": "pcm_s16le"}))
             async for msg in ws:
                 if isinstance(msg, bytes):
                     for pb in playbacks:
@@ -609,7 +611,11 @@ class MagpieSynthesizer:
             form = aiohttp.FormData()
             form.add_field("language", locale)
             form.add_field("text", text)
-            form.add_field("voice", f"Magpie-Multilingual.{locale.upper()}.{MAGPIE_VOICE[voice]}")
+            # the speaker's voice and tone, or the nearest this language has
+            name = voices.magpie_name(await voices.catalog(self.http), lang, voice)
+            form.add_field("voice", name)
+            if LOG_TEXT:
+                log.info("speaking %s in %s (chosen: %s)", utt.id, name, voice)
             form.add_field("sample_rate_hz", str(OUT_SR))
             t0, size, stats = time.perf_counter(), 0, {}
             async with self.http.post(f"{MAGPIE_TTS_URL}/audio/synthesize_online", data=form) as r:
