@@ -93,6 +93,7 @@
   class AssistantChat {
     constructor(root, opts = {}) {
       this.opts = { meetingCode: null, conversationId: null, onConversation: () => {}, onList: () => {}, voice: true,
+                    onMicChange: () => {}, lang: null,
                     placeholder: "Schedule a review with Priya tomorrow at 4 pm · What did we decide about the budget? · Book a table for 3 on Friday", ...opts };
       this.conversationId = this.opts.conversationId;
       this.busy = false;
@@ -309,7 +310,9 @@
       this.langSel = el("select", { "aria-label": "Language you speak" }, el("option", { value: "en", text: "English" }), el("option", { value: "hi", text: "हिंदी" }));
       this.langSel.addEventListener("change", () => { this.v.lang = this.langSel.value; });
       this.micBtn.addEventListener("click", () => (this.v.on ? this.micOff() : this.micOn()));
-      api("/api/me").then((m) => { if (m.user.preferredLanguage === "hi") { this.langSel.value = "hi"; this.v.lang = "hi"; } }).catch(() => {});
+      const setLang = (l) => { if (l === "hi" || l === "en") { this.langSel.value = l; this.v.lang = l; } };
+      if (this.opts.lang) setLang(this.opts.lang);
+      else api("/api/me").then((m) => setLang(m.user.preferredLanguage)).catch(() => {});
       return el("div", { class: "voice-bar" }, this.micBtn, this.vStatus, el("label", { class: "voice-opt" }, this.langSel));
     }
     status(t) { if (this.vStatus) this.vStatus.textContent = t; }
@@ -329,6 +332,7 @@
         src.connect(v.node);
         v.on = true;
         this.micBtn.setAttribute("aria-pressed", "true");
+        this.opts.onMicChange(true);
         this.listen();
       } catch (e) {
         console.error("assistant microphone", e);
@@ -341,6 +345,7 @@
 
     micOff() {
       const v = this.v;
+      const was = v.on;
       v.on = false;
       v.phase = "off";
       v.gen++;
@@ -352,6 +357,7 @@
       this.micBtn.classList.remove("speaking", "held");
       this.micBtn.style.setProperty("--level", 0);
       this.status("Mic off. Turn it on to talk.");
+      if (was) this.opts.onMicChange(false);
     }
 
     listen() {

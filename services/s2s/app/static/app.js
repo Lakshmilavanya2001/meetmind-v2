@@ -314,6 +314,8 @@ async function leave(note) {
   clearInterval(state.elapsedTimer);
   $("side").hidden = true;
   $("side").dataset.panel = "";
+  if (state.assistant?.v.on) state.assistant.micOff();
+  $("assistant-banner").hidden = true;
   $("side-assistant").replaceChildren();
   state.assistant = null;
   $("join").hidden = false;
@@ -471,14 +473,29 @@ function openPanel(name) {
   if (name === "assistant") ensureAssistant();
 }
 
+// The assistant's own mic in the call: while it's on, the call mic is muted (what you say to the
+// assistant isn't sent to the others); turning it off puts the call mic back as it was.
+async function assistantMic(on) {
+  if (on) {
+    state.micBeforeAssistant = state.micOn;
+    if (state.micOn) await setCallMic(false);
+    $("assistant-banner").hidden = false;
+  } else {
+    $("assistant-banner").hidden = true;
+    if (state.micBeforeAssistant && !state.micOn && state.room) await setCallMic(true);
+    state.micBeforeAssistant = false;
+  }
+}
+
 // The assistant in the call: the same agents as the Assistant page, attached to this meeting, and the
 // same conversation Hey Mind uses, so spoken requests and their Confirm cards show up here too.
 function ensureAssistant(conversation) {
   if (!state.meeting) return;
   if (!state.assistant) {
     state.assistant = new AssistantChat($("side-assistant"), {
-      meetingCode: state.meeting.code, voice: false, dark: true,
+      meetingCode: state.meeting.code, voice: true, dark: true, lang: state.me.speak,
       placeholder: "Ask the assistant… (only you see this)",
+      onMicChange: assistantMic,
     });
     (conversation ? state.assistant.open(conversation) : state.assistant.openLatestForMeeting()).catch((e) => state.assistant.fail(e));
   } else if (conversation && conversation !== state.assistant.conversationId) {
@@ -981,12 +998,17 @@ for (const [id, key] of [["show-english", "showEnglish"], ["show-original", "sho
   });
 }
 
+async function setCallMic(on) {
+  state.micOn = on;
+  await state.room.localParticipant.setMicrophoneEnabled(on);
+  $("mute").setAttribute("aria-pressed", String(!on));
+  $("mute-label").textContent = on ? "Mute" : "Unmute";
+  if (on) watchMyMic();
+}
 $("mute").addEventListener("click", async () => {
-  state.micOn = !state.micOn;
-  await state.room.localParticipant.setMicrophoneEnabled(state.micOn);
-  $("mute").setAttribute("aria-pressed", String(!state.micOn));
-  $("mute-label").textContent = state.micOn ? "Mute" : "Unmute";
-  if (state.micOn) watchMyMic();
+  // Unmuting for the call while talking to the assistant: the assistant's mic goes off first.
+  if (!state.micOn && state.assistant?.v.on) { state.micBeforeAssistant = false; state.assistant.micOff(); }
+  await setCallMic(!state.micOn);
 });
 
 $("copy-link").addEventListener("click", async () => {

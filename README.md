@@ -543,6 +543,10 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
   - Only you see it. It's the same conversation Hey Mind uses, so spoken requests and their Confirm
     cards show up there too.
   - **Ask Mind** makes your next sentence go to the assistant only, like saying "Hey Mind".
+  - The panel has its own mic, which works like the Assistant page's: it stays on until you turn it
+    off, and replies are spoken only to you. While it's on, your call mic is muted, so what you say to
+    the assistant isn't sent to the others, and a notice says so. Turning it off puts your call mic
+    back as it was.
 - **In a call** (`voice.py`): "Hey Mind" goes through the same agents in voice mode: one or two spoken
   sentences, on the asker's own track. Each caller has one conversation per meeting, also shown on
   their Assistant page. For an action, Mind reads out what it will do and the caller says **yes**

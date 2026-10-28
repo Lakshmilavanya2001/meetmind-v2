@@ -58,6 +58,24 @@ test("meetmind-v2: call screen, panels and the assistant inside the call", async
     const convs = await (await a.request.get(`/api/assistant/conversations?meeting=${code}`)).json();
     expect(convs.conversations.length).toBe(1);
 
+    // The panel's own mic: while it's on, the call mic is muted (Ben sees Asha muted) and a notice says so;
+    // turning it off brings the call mic back.
+    await b.locator("#mute").click();                                     // Ben unmutes again
+    const panelMic = a.locator("#side-assistant .mic");
+    await expect(panelMic).toBeVisible();
+    await expect(a.locator("#mute")).toHaveAttribute("aria-pressed", "false");
+    await panelMic.click();
+    await expect(panelMic).toHaveAttribute("aria-pressed", "true", { timeout: 10_000 });
+    await expect(a.locator("#mute")).toHaveAttribute("aria-pressed", "true");
+    await expect(a.locator("#assistant-banner")).toBeVisible();
+    await expect(b.locator(".person:not(.me).muted")).toHaveCount(1, { timeout: 10_000 });
+    await a.screenshot({ path: "call-assistant-mic.png" });
+    await panelMic.click();
+    await expect(panelMic).toHaveAttribute("aria-pressed", "false");
+    await expect(a.locator("#mute")).toHaveAttribute("aria-pressed", "false");
+    await expect(a.locator("#assistant-banner")).toBeHidden();
+    await expect(b.locator(".person:not(.me).muted")).toHaveCount(0, { timeout: 10_000 });
+
     // "Ask Mind": the agent acknowledges privately (its "Yes?" is spoken to Asha only).
     await a.locator("#ask-mind").click();
     await expect(a.locator(".toast").last()).toContainText("Mind is listening");

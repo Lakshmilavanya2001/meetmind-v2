@@ -477,3 +477,10 @@ a.brand { color: inherit; text-decoration: none; }
   .key-end { width: 60px; height: 60px; }
   .call-top .latency, .call-top #translator { display: none; }
 }
+.assistant-banner { background: rgb(124 92 255 / .22); color: #e4dcff; font-size: 14px; padding: 6px 16px; text-align: center; margin: 0; }
+.assistant-banner[hidden] { display: none; }
+.assistant-chat.dark .voice-bar { padding: 10px 12px 0; }
+.assistant-chat.dark .mic { background: rgb(255 255 255 / .08); border-color: rgb(255 255 255 / .2); color: #fff; }
+.assistant-chat.dark .mic[aria-pressed="true"] { background: #3fd9b8; border-color: #3fd9b8; color: #06221c; }
+.assistant-chat.dark .voice-status { color: rgb(255 255 255 / .65); }
+.assistant-chat.dark .voice-opt select { background: rgb(255 255 255 / .06); color: #fff; border-color: rgb(255 255 255 / .15); }
