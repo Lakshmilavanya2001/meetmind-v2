@@ -484,3 +484,8 @@ a.brand { color: inherit; text-decoration: none; }
 .assistant-chat.dark .mic[aria-pressed="true"] { background: #3fd9b8; border-color: #3fd9b8; color: #06221c; }
 .assistant-chat.dark .voice-status { color: rgb(255 255 255 / .65); }
 .assistant-chat.dark .voice-opt select { background: rgb(255 255 255 / .06); color: #fff; border-color: rgb(255 255 255 / .15); }
+.mind-banner { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin: 0; padding: 6px 16px;
+  background: rgb(124 92 255 / .28); color: #ece6ff; font-size: 14px; text-align: center; }
+.mind-banner[hidden] { display: none; }
+.mind-banner .btn { background: #fff; color: #2b1d6b; border-color: #fff; padding: 4px 12px; }
+#ask-mind[aria-pressed="true"] { background: #7c5cff; color: #fff; }

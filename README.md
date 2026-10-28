@@ -547,6 +547,16 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
     off, and replies are spoken only to you. While it's on, your call mic is muted, so what you say to
     the assistant isn't sent to the others, and a notice says so. Turning it off puts your call mic
     back as it was.
+- **A conversation with Mind in a call:**
+  - Once woken ("Hey Mind", or the Ask Mind key), everything you say goes to Mind while it thinks and
+    speaks, and for 20 s after it **finishes speaking** (`MIND_FOLLOWUP_S`). Each reply restarts the
+    20 s, so you can keep talking without saying "Hey Mind" again.
+  - "Thanks Mind" / "that's all" / "bye", the **Done** button on the purple "Talking to Mind"
+    banner, or 20 s of quiet ends it, and your words go to the call again.
+  - Questions asked while Mind is still answering are queued, one at a time.
+  - Your replies aren't dropped as echo just because they repeat Mind's words ("Mini", "yes, go
+    ahead"). Within the conversation, a sentence counts as echo only if it both sounds like playout and
+    repeats most (4 or more words) of what was just played.
 - **In a call** (`voice.py`): "Hey Mind" goes through the same agents in voice mode: one or two spoken
   sentences, on the asker's own track. Each caller has one conversation per meeting, also shown on
   their Assistant page. For an action, Mind reads out what it will do and the caller says **yes**

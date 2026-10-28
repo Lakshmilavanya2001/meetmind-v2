@@ -316,6 +316,7 @@ async function leave(note) {
   $("side").dataset.panel = "";
   if (state.assistant?.v.on) state.assistant.micOff();
   $("assistant-banner").hidden = true;
+  $("mind-banner").hidden = true;
   $("side-assistant").replaceChildren();
   state.assistant = null;
   $("join").hidden = false;
@@ -689,6 +690,10 @@ function handleAgentMessage(m) {
       }
       break;
     }
+    case "mind_session":                               // my words are going to Mind (or to the call again)
+      $("mind-banner").hidden = !m.active;
+      $("ask-mind").setAttribute("aria-pressed", String(!!m.active));
+      break;
     case "assistant": {
       const u = mindBubble(m.utt);
       if (m.state === "thinking") {
@@ -955,13 +960,19 @@ $("captions-toggle").addEventListener("click", () => {
   $("feed").hidden = !on;
 });
 $("d-copy").addEventListener("click", () => $("copy-link").click());
-// "Ask Mind": the next sentence goes to the assistant only, as after saying "Hey Mind".
-$("ask-mind").addEventListener("click", async () => {
+// "Ask Mind": a conversation with the assistant starts, as after saying "Hey Mind"; pressed again
+// (or Done on the banner), it ends and your words go to the call again.
+async function toMind(msg) {
   const agent = state.room && [...state.room.remoteParticipants.values()].find(isAgent);
-  if (!agent) { toast("The assistant joins with the translator. Try again in a moment."); return; }
-  await state.room.localParticipant.publishData(new TextEncoder().encode("{}"), { reliable: true, topic: "mind", destinationIdentities: [agent.identity] });
-  toast("Mind is listening: ask your question. Only you hear the answer.", { key: "mind" });
+  if (!agent) { toast("The assistant joins with the translator. Try again in a moment."); return false; }
+  await state.room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(msg)), { reliable: true, topic: "mind", destinationIdentities: [agent.identity] });
+  return true;
+}
+$("ask-mind").addEventListener("click", async () => {
+  if (!$("mind-banner").hidden) { await toMind({ end: true }); return; }
+  if (await toMind({})) toast("Mind is listening: ask your question. Only you hear the answer.", { key: "mind" });
 });
+$("mind-done").addEventListener("click", () => toMind({ end: true }));
 $("new-room").addEventListener("click", () => { $("room").value = newRoomName(); });
 $("mic-test").addEventListener("click", () => (state.testMic ? stopMicTest() : startMicTest()));
 $("mic-device").addEventListener("change", startMicTest);

@@ -116,3 +116,40 @@ def test_minds_private_answer_is_echo_only_for_its_listener():
     ben = np.frombuffer(tl.read(now, int(OUT_SR * 0.04), "ben"), np.int16)
     assert asha[:960].any() and asha[960:1920].any()
     assert not ben[:960].any() and ben[960:1920].any()
+
+
+@pytest.mark.parametrize("said,ends", [
+    ("Thanks Mind.", True), ("Thank you.", True), ("That's all", True), ("Okay thanks, Mind", True), ("Bye", True),
+    ("धन्यवाद", True), ("बस इतना ही", True), ("Done.", True),
+    ("Thanks for booking the cab, now order lunch", False), ("Stop the transcript", False), ("Yes, go ahead.", False),
+])
+def test_what_ends_a_conversation_with_mind(said, ends):
+    from app.agent import MIND_EXIT
+    assert bool(MIND_EXIT.match(said)) is ends
+
+
+async def test_a_conversation_with_mind_stays_open_while_it_answers_and_after():
+    import time as _t
+    from types import SimpleNamespace
+
+    from app import agent
+    call = agent.CallTranslator(SimpleNamespace(name="mm-test-room"))
+    sent = []
+
+    async def send(msg, to=None):
+        sent.append((msg, to))
+    call.send = send
+    assert not call.awake("ben")
+    call.mind_busy["ben"] = 1                                   # a question is being answered
+    assert call.awake("ben")
+    call.mind_spoken("ben", _t.time(), "answer")                # ...and has been spoken
+    assert call.awake("ben") and call.awake_until["ben"] > _t.time() + agent.MIND_FOLLOWUP_S - 1
+    # Replies repeat Mind's words; that alone isn't echo (only 4+ words mostly repeating Mind are).
+    call.mind_last["ben"] = (_t.time(), call._words("Options: Auto, Mini, Sedan. Say yes to go ahead, or no to cancel."))
+    assert not call.repeats_mind("ben", "Yes, go ahead.")
+    assert not call.repeats_mind("ben", "I would prefer mini")
+    assert call.repeats_mind("ben", "say yes to go ahead or no to cancel")
+    call.end_mind("ben")
+    assert not call.awake("ben")
+    await __import__("asyncio").sleep(0.05)
+    assert [m["active"] for m, to in sent if m.get("type") == "mind_session"][-1] is False
