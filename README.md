@@ -542,6 +542,20 @@ of audio, first audio after 371 ms), and both heard it at 1.57 s.
 docker run --rm --network host --env-file .env -v $PWD/clients:/clients -v $PWD/testdata:/td indic-s2s:0.1 python /clients/call_test_shared.py
 ```
 
+**"Hey Mind", the assistant in the call.** A caller says "Hey Mind, …" (or "Hey Mind", a pause,
+then the question, within 8 s: `S2S_WAKE_WINDOW_S`). The agent spots the wake phrase in its own
+transcript (`services/s2s/app/wake.py`, every spelling Parakeet produces, in Latin and Indian
+scripts, e.g. "पेमाइंड", "पह माइंड", "Pay mind"). That utterance is **private**: its captions go only
+to the asker (`destination_identities`), it's never translated for the others, and a partial that
+may still become the wake phrase ("Hey", "Hey my", "हे") is held back from them too. The answer
+(`services/s2s/app/assistant/`, the chat LLM: `ASSISTANT_LLM_URL`/`ASSISTANT_LLM_MODEL`, by default
+the translator's Qwen) is one to three spoken sentences in the language asked in, shown in the
+asker's feed and spoken on their own track (`S2S_ASSISTANT_VOICE`). It can use the last 20 minutes
+of this call ("what did Ben just say?", "summarise the call"); the conversation is passed as data,
+never as instructions. Tools (bookings, meetings, reminders) come with the assistant's agents.
+Measured with `clients/mind_test.py` (2026-10-28, two runs): answers in 0.33-0.63 s; the other
+caller received nothing about either question (Hindi and English).
+
 **Background noise removal** (each caller picks it on the join form or in Settings; attribute
 `noise`):
 

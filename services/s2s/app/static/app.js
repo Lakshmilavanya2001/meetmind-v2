@@ -495,6 +495,18 @@ function onAgentMessage(m) {
   followFeed();
 }
 
+// "Hey Mind": the assistant's answer to me, in my feed only (nobody else gets these messages).
+function mindBubble(utt) {
+  const id = `${utt}:mind`;
+  let u = state.utts.get(id);
+  if (u) return u;
+  u = bubble(id, "mind");
+  u.el.classList.add("mind");
+  u.el.querySelector(".who").textContent = "Mind";
+  u.langs.textContent = "only you hear this";
+  return u;
+}
+
 function handleAgentMessage(m) {
   switch (m.type) {
     case "transcript": {
@@ -504,6 +516,15 @@ function handleAgentMessage(m) {
       }
       const u = bubble(m.utt, m.speaker);
       u.original = m.text;
+      if (m.assistant) {                    // my words to the assistant: private, not translated
+        u.el.classList.add("to-mind");
+        u.main.textContent = m.text;
+        u.main.classList.toggle("partial", !m.final);
+        u.langs.textContent = "to Mind, private";
+        setStatus(u, m.final ? "asking..." : "listening...", m.final ? "done" : "");
+        break;
+      }
+      if (u.mine && !m.final && u.el.classList.contains("to-mind")) break;
       if (m.final && m.echo) {            // the worker recognised a speaker's sound, not a person
         u.main.textContent = m.text;
         u.main.classList.remove("partial");
@@ -564,6 +585,22 @@ function handleAgentMessage(m) {
       } else if (u.mine) {
         setStatus(u, `heard ${u.delay}`, "done");
       }
+      break;
+    }
+    case "assistant": {
+      const u = mindBubble(m.utt);
+      if (m.state === "thinking") {
+        u.main.textContent = "…";
+        u.main.classList.add("partial");
+        setStatus(u, "thinking...");
+      } else {
+        u.main.textContent = m.text || "";
+        u.main.classList.remove("partial");
+        setStatus(u, "voicing...");
+        u.status.title = `Answered in ${m.ms} ms`;
+        if (state.playing !== u && !state.playQueue.includes(u)) state.playQueue.push(u);
+      }
+      followFeed();
       break;
     }
     case "status":

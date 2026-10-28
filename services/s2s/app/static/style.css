@@ -265,3 +265,8 @@ body.hide-english .via-english, body.hide-original .their-original { display: no
   .utt-main { font-size: 17px; }
   .toasts { inset: auto 12px calc(92px + env(safe-area-inset-bottom)) 12px; width: auto; }
 }
+
+/* "Hey Mind": my private exchange with the assistant */
+.utt.to-mind { border-style: dashed; opacity: 0.9; }
+.utt.mind { border-left: 3px solid #7c5cff; }
+.utt.mind .who { color: #7c5cff; }

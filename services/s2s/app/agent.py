@@ -46,6 +46,8 @@ from livekit.agents import AgentServer, AutoSubscribe, JobContext, cli
 
 from . import bnr
 from .asr import AsrStream
+from .assistant import call as mind
+from .wake import may_become_wake, strip_wake_phrase
 from .languages import HEAR, PROMPT_NAME, SCRIPT, SPEAK
 
 log = logging.getLogger("s2s")
@@ -81,6 +83,9 @@ IN_SR = 16_000                      # what the ASR wants
 OUT_SR = 48_000                     # WebRTC's native rate; the TTS service resamples to it
 OUT_FRAME = OUT_SR // 50            # 20 ms frames into the LiveKit audio source
 CAPTIONS_TOPIC = "captions"
+# "Hey Mind": the assistant's voice, and how long after a bare "Hey Mind" the next utterance is the question.
+ASSISTANT_VOICE = "male" if os.environ.get("S2S_ASSISTANT_VOICE") == "male" else "female"
+WAKE_WINDOW_S = float(os.environ.get("S2S_WAKE_WINDOW_S", "8"))
 
 # Translation route between two Indian languages (S2S_PIVOT_THROUGH_ENGLISH):
 #   0 -> direct, source -> target (default: one model call, keeps meaning and register)
@@ -753,6 +758,13 @@ class CallTranslator:
         self.workers: dict[str, asyncio.Task] = {}
         self.tasks: set[asyncio.Task] = set()
         self.reconcile_lock = asyncio.Lock()     # room events arrive in bursts
+        # "Hey Mind": what was said (for questions about the call), who just woke the assistant,
+        # and which utterances are for the assistant (their captions go to the asker only).
+        self.memory = mind.CallMemory()
+        self.awake_until: dict[str, float] = {}
+        self.private_utts: set[str] = set()
+        self.mind_http: aiohttp.ClientSession | None = None
+        self.mind_count = 0
 
     # ------------------------------------------------------------------ room state
     def humans(self) -> list[rtc.RemoteParticipant]:
@@ -837,16 +849,20 @@ class CallTranslator:
             t.cancel()
         await self.translator.close()
         await self.synth.close()
+        if self.mind_http is not None:
+            await self.mind_http.close()
 
     # ------------------------------------------------------------------ messages to callers
-    async def send(self, msg: dict):
+    async def send(self, msg: dict, to: list[str] | None = None):
+        """To every caller, or only to `to` (the assistant's exchanges go to the asker alone)."""
         try:
             payload = json.dumps(msg, ensure_ascii=False).encode()
         except (TypeError, ValueError):
             log.exception("caption message %s could not be encoded", msg.get("type"))
             return
         try:
-            await self.room.local_participant.publish_data(payload, reliable=True, topic=CAPTIONS_TOPIC)
+            await self.room.local_participant.publish_data(payload, reliable=True, topic=CAPTIONS_TOPIC,
+                                                           destination_identities=to or [])
         except Exception as e:  # noqa: BLE001 - a caller leaving mid-send is normal
             log.warning("caption message %s not sent: %s", msg.get("type"), e)
 
@@ -881,8 +897,18 @@ class CallTranslator:
         if kind == "speech_start":
             await self.send({"type": "speech_start", "utt": utt_id, "speaker": caller.identity})
         elif kind == "partial":
-            await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
-                             "lang": caller.speak, "text": m["text"], "final": False})
+            text = m["text"]
+            # Words for the assistant stay private from the first partial on; a bare "Hey…" is held
+            # back from the others until it's clear what follows.
+            if utt_id not in self.private_utts and (strip_wake_phrase(text)[0] or self.awake(caller.identity)):
+                self.private_utts.add(utt_id)
+            private = utt_id in self.private_utts
+            if private or may_become_wake(text):
+                await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity, "lang": caller.speak,
+                                 "text": text, "final": False, "assistant": private}, to=[caller.identity])
+            else:
+                await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
+                                 "lang": caller.speak, "text": text, "final": False})
         elif kind == "final":
             text = m["text"].strip()
             score = inp.echo.echo_score(inp.wall_at(m["start_ms"]), inp.wall_at(m["end_ms"])) if text else 0.0
@@ -892,16 +918,62 @@ class CallTranslator:
                 log.info("heard %s (%s, echo score %.2f%s%s): %s", utt_id, caller.speak, score,
                          ", repeats played words" if repeats else "",
                          ", dropped as echo" if echo else "", text)
+            woke, command = strip_wake_phrase(text) if text and not echo else (False, text)
+            if text and not echo and (woke or self.awake(caller.identity)):
+                self.private_utts.discard(utt_id)
+                await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity, "lang": caller.speak,
+                                 "text": text, "final": True, "echo": False, "assistant": True}, to=[caller.identity])
+                if woke and not command:                     # "Hey Mind" … (pause) … the question
+                    self.awake_until[caller.identity] = time.time() + WAKE_WINDOW_S
+                    self.speak_to(caller.identity, mind.LISTENING.get(caller.speak, mind.LISTENING["en"]), caller.speak)
+                    return
+                self.awake_until.pop(caller.identity, None)
+                self.spawn(self.ask_mind(caller, utt_id, command if woke else text))
+                return
+            self.private_utts.discard(utt_id)
             await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
                              "lang": caller.speak, "text": text, "final": True, "echo": echo})
             if not text or echo:
                 return
+            self.memory.add(caller.name, caller.speak, text)
             end_ms = m["end_ms"] - (0 if m.get("forced") else SPEECH_PAD_MS)
             utt = Utterance(utt_id, caller.identity, text, inp.wall_at(end_ms), time.time())
             utt.marks["asr_decode_ms"] = m.get("decode_ms")
             await self.queues[caller.identity].put(utt)
         elif kind == "error":
             log.warning("asr error for %s: %s", inp.identity, m.get("message"))
+
+    # ------------------------------------------------------------------ "Hey Mind"
+    def awake(self, ident: str) -> bool:
+        return self.awake_until.get(ident, 0) > time.time()
+
+    def speak_to(self, ident: str, text: str, lang: str):
+        """Say something on one caller's own track (only they hear it), after what's queued there."""
+        out = self.outputs.get(ident)
+        if out is None or not text:
+            return
+        self.mind_count += 1
+        utt = Utterance(f"mind:{ident}:{self.mind_count}", ident, text, time.time(), time.time())
+        self.remember_played(lang, text)                 # the answer leaking into a mic isn't a new question
+        self.spawn(self.synth.say(utt, text, lang, ASSISTANT_VOICE, [out.enqueue(utt)]))
+
+    async def ask_mind(self, caller: Caller, utt_id: str, question: str):
+        ident = caller.identity
+        await self.send({"type": "assistant", "utt": utt_id, "state": "thinking", "question": question}, to=[ident])
+        t0 = time.time()
+        try:
+            if self.mind_http is None:
+                self.mind_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=30))
+            people = [c.name for c in self.callers.values()]
+            text = await mind.answer(self.mind_http, question, caller.name, caller.speak, people, self.memory)
+        except Exception:  # noqa: BLE001
+            log.exception("assistant answer for %s failed", utt_id)
+            text = "Sorry, I couldn't answer that just now." if caller.speak != "hi" else "माफ़ कीजिए, अभी जवाब नहीं दे पाया।"
+        if LOG_TEXT:
+            log.info("assistant for %s (%d ms): %s -> %s", ident, round((time.time() - t0) * 1000), question, text)
+        await self.send({"type": "assistant", "utt": utt_id, "state": "answer", "question": question, "text": text,
+                         "ms": round((time.time() - t0) * 1000)}, to=[ident])
+        self.speak_to(ident, text, caller.speak)
 
     async def utterance_worker(self, ident: str):
         """One speaker's utterances, in order. Each one is translated into every listener
@@ -955,6 +1027,8 @@ class CallTranslator:
 
     async def utterance_audio_done(self, utt: Utterance, listener: str, tts: dict):
         """Per-utterance latency, measured from the moment the speaker stopped talking."""
+        if utt.id.startswith("mind:"):                    # the assistant's own speech isn't a translation
+            return
         first_audio = utt.marks.get(f"audio:{listener}")
         caller = self.callers.get(listener)
         lang = caller.hear if caller else None
