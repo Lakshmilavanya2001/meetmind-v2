@@ -15,15 +15,17 @@ host, deploys and uses itself:
 | Step | Model | Where it runs | API |
 |---|---|---|---|
 | Speech recognition | NVIDIA Parakeet 1.1B RNNT multilingual, offline mode | Riva runtime on this host's GPU (meetmind's `deploy/gpu-host`, service `asr`), `127.0.0.1:8001` | `POST /v1/audio/transcriptions`, one request per utterance (the same API as the IndicConformer NIM) |
-| Translation | NVIDIA Riva Translate 1.6B (`megatronnmt_any_any_1b`: 36 languages, any direction) | Riva runtime on this host's GPU (service `nmt`), `127.0.0.1:8002` | `POST /v1/text/translations`, the Riva Translate NIM's API |
+| Translation | **Qwen** `qwen3.8-27b`, a chat LLM with an interpreter instruction (thinking off). Since 2026-10-28; Riva Translate 1.6B before, and still the default without the settings | vLLM on another GPU host (`S2S_TRANSLATE_API=chat`, `S2S_TRANSLATE_URL`, `S2S_TRANSLATE_MODEL` in `.env`) | OpenAI chat completions, streamed |
+| Translation (default) | NVIDIA Riva Translate 1.6B (`megatronnmt_any_any_1b`: 36 languages, any direction) | Riva runtime on this host's GPU (meetmind's service `nmt`), `127.0.0.1:8002` | `POST /v1/text/translations`, the Riva Translate NIM's API |
 | Speech | NVIDIA Magpie TTS Multilingual | Magpie TTS NIM on another GPU host (`MAGPIE_TTS_URL` in `.env`) | `POST /v1/audio/synthesize_online`, raw PCM streamed |
 | WebRTC | LiveKit | meetmind's LiveKit server, `127.0.0.1:7880` | LiveKit |
 
-Callers speak and hear **English or Hindi**, the languages all three models cover. From the
-moment a speaker stops, the translation starts playing after ~0.9 s and the other caller
-hears it after ~1.1 s (see [Translated calls](#translated-calls-livekit)). The two model
-servers on this GPU take ~22 GB (Parakeet ~12 GB, Riva Translate ~9.6 GB); the call stack
-itself needs no GPU.
+Callers speak and hear **English or Hindi**, the languages all these models cover. With Qwen,
+the translation starts playing ~1.15–1.35 s after a speaker stops, and the other caller hears
+it after ~1.4–1.5 s. With Riva it's ~0.9 s and ~1.1 s, but Qwen's translations read more
+naturally and hold up better against recognition slips (see
+[Translated calls](#translated-calls-livekit)). The two model servers on this GPU take
+~22 GB (Parakeet ~12 GB, Riva Translate ~9.6 GB); the call stack itself needs no GPU.
 
 ## This repo's own model stack (off for now)
 
@@ -377,7 +379,7 @@ the current ones):
 | Setting | Current (shared) | Own model stack |
 |---|---|---|
 | `ASR_URL` | Parakeet, `http://127.0.0.1:8001` | IndicConformer NIM, same address and API |
-| `TRANSLATE_API`, `TRANSLATE_URL` | `riva`, `http://127.0.0.1:8002` | `openai`, `http://127.0.0.1:8002/v1` (indic-translate) |
+| `TRANSLATE_API`, `TRANSLATE_URL`, `TRANSLATE_MODEL` | `chat`, Qwen's `/v1` URL, `qwen3.8-27b` (from `S2S_TRANSLATE_API`, `S2S_TRANSLATE_URL`, `S2S_TRANSLATE_MODEL` in `.env`); without those, `riva`, `http://127.0.0.1:8002` | `openai`, `http://127.0.0.1:8002/v1`, `indic-translate` |
 | `TTS_API` | `magpie` (`MAGPIE_TTS_URL`; voices `MAGPIE_FEMALE_VOICE` Louise, `MAGPIE_MALE_VOICE` Leo) | `indic-speak` (`TTS_URL`) |
 | `S2S_SPEAK_LANGUAGES`, `S2S_HEAR_LANGUAGES` | `en,hi` | unset: every language the models cover |
 
@@ -480,6 +482,18 @@ speaker stops talking:
 
 Most of what is left is the 0.5 s pause that ends an utterance (`S2S_VAD_MIN_SILENCE_MS`)
 and translation (~0.3 s); Magpie's first audio takes ~50 ms.
+
+**Qwen as the translator** (`S2S_TRANSLATE_API=chat`, qwen3.8-27b, three runs each, back to
+back with Riva on 2026-10-27): heard after 1.36–1.41 s (Hindi → English) and 1.50–1.53 s
+(English → Hindi), against Riva's 1.14–1.20 s and 1.09–1.13 s. The agent speaks a
+translation only once it is complete, and Qwen takes ~0.5–0.7 s for these sentences
+against Riva's ~0.3 s. Its translations read more naturally and held up better against
+recognition slips:
+
+| | Qwen | Riva |
+|---|---|---|
+| Hindi clip ("…पहला पाठ पढ़िए", recognized with slips) | "…Please open your books and read the first page." | "…read the first letter" / "…increase the first poem" |
+| "Can we move the launch review to Friday at three…?" | "क्या हम लॉन्च रिव्यू को शुक्रवार को दोपहर तीन बजे पर शिफ्ट कर सकते हैं?" | "क्या हम दोपहर तीन बजे शुक्रवार को लॉन्च समीक्षा स्थानांतरित कर सकते हैं?" (formal) |
 
 **With the own model stack** (`clients/call_test.py`, 2026-10-26):
 

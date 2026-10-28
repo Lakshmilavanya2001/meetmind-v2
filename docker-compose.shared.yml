@@ -23,8 +23,11 @@ services:
     depends_on: !reset {}
     environment:
       ASR_URL: http://127.0.0.1:8001            # Parakeet (Riva HTTP API, as IndicConformer's)
-      TRANSLATE_API: riva
-      TRANSLATE_URL: http://127.0.0.1:8002      # Riva Translate 1.6B
+      # Riva Translate 1.6B by default. A chat LLM instead, e.g. Qwen: S2S_TRANSLATE_API=chat,
+      # S2S_TRANSLATE_URL=http://host:8000/v1, S2S_TRANSLATE_MODEL=<its model name>
+      TRANSLATE_API: ${S2S_TRANSLATE_API:-riva}
+      TRANSLATE_URL: ${S2S_TRANSLATE_URL:-http://127.0.0.1:8002}
+      TRANSLATE_MODEL: ${S2S_TRANSLATE_MODEL:-}
       TTS_API: magpie
       MAGPIE_TTS_URL: ${MAGPIE_TTS_URL:?set MAGPIE_TTS_URL in .env (the Magpie TTS NIM, http://host:9000/v1)}
       S2S_SPEAK_LANGUAGES: en,hi
