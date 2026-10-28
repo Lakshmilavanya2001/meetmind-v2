@@ -5,6 +5,15 @@
 
 const { Room, RoomEvent, Track, ParticipantKind } = LivekitClient;
 const $ = (id) => document.getElementById(id);
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  e.append(...children.filter((c) => c != null));
+  return e;
+}
 
 const state = {
   room: null,
@@ -133,6 +142,16 @@ function levelLoop() {
 }
 const setLevel = (el, v) => el && el.style.setProperty("--level", v.toFixed(3));
 const avatarOf = (identity) => document.querySelector(`.person[data-identity="${CSS.escape(identity)}"] .avatar`);
+// A person's circle pulses while they talk, and their state reads "speaking" (meetmind's call screen).
+function setSpeaking(identity, v) {
+  const tile = document.querySelector(`.person[data-identity="${CSS.escape(identity)}"]`);
+  if (!tile) return;
+  const talking = v > 0.12;
+  if (tile.classList.contains("is-speaking") === talking) return;
+  tile.classList.toggle("is-speaking", talking);
+  const st = tile.querySelector(".person-state");
+  if (st && !tile.classList.contains("muted")) st.textContent = talking ? "speaking" : "listening";
+}
 
 // ------------------------------------------------------------------ languages
 function fillSelect(sel, list, value) {
@@ -244,8 +263,9 @@ async function join(ev) {
 
     if (!state.meeting) history.replaceState(null, "", `?room=${encodeURIComponent(roomName)}`);
     $("room-name").textContent = state.meeting ? state.meeting.title : roomName;
-    $("end-all").hidden = !(state.meeting && ["HOST", "COHOST"].includes(state.meeting.myRole));
-    $("save-toggle").hidden = $("end-all").hidden;
+    const moderator = !!(state.meeting && ["HOST", "COHOST"].includes(state.meeting.myRole));
+    $("end-all-key").hidden = $("save-key").hidden = !moderator;
+    startCallChrome(roomName);
     if (state.meeting) watchMeeting();
     syncSettingsForm();
     $("join").hidden = true;
@@ -270,6 +290,7 @@ function watchMyMic() {
     const level = state.micOn ? v : 0;
     setLevel($("mic-ring"), level);
     setLevel(avatarOf(state.me.identity), level);
+    setSpeaking(state.me.identity, level);
   });
 }
 
@@ -290,6 +311,11 @@ async function leave(note) {
   $("latency").textContent = "";
   document.querySelectorAll("audio[data-lk]").forEach((a) => a.remove());
   $("call").hidden = true;
+  clearInterval(state.elapsedTimer);
+  $("side").hidden = true;
+  $("side").dataset.panel = "";
+  $("side-assistant").replaceChildren();
+  state.assistant = null;
   $("join").hidden = false;
   if (state.meeting) location.assign(note === "ended" ? "/dashboard?ended=1" : "/dashboard");
 }
@@ -300,20 +326,24 @@ const humans = () => state.room ? [...state.room.remoteParticipants.values()].fi
 
 function wireRoom(room) {
   room
-    .on(RoomEvent.Connected, () => $("conn-dot").classList.add("on"))
+    .on(RoomEvent.Connected, () => { $("conn-dot").classList.add("on"); $("conn-text").textContent = "Connected"; })
     .on(RoomEvent.Reconnecting, () => {
       $("conn-dot").classList.remove("on");
+      $("conn-text").textContent = "Reconnecting…";
       toast("Connection lost, reconnecting...", { key: "conn", timeout: 0 });
     })
-    .on(RoomEvent.Reconnected, () => { $("conn-dot").classList.add("on"); toast("Reconnected.", { key: "conn" }); })
+    .on(RoomEvent.Reconnected, () => { $("conn-dot").classList.add("on"); $("conn-text").textContent = "Connected"; toast("Reconnected.", { key: "conn" }); })
     .on(RoomEvent.Disconnected, async () => {
       $("conn-dot").classList.remove("on");
+      $("conn-text").textContent = "Disconnected";
       // Dropped without leaving: if the host ended the meeting, say so and leave (not a dead call screen).
       if (!state.meeting || state.room !== room) return;
       const r = await fetch(`/api/meetings/${state.meeting.code}`).catch(() => null);
       const status = r?.ok ? (await r.json()).meeting.status : null;
       if (status === "ENDED" || status === "CANCELLED") await leave("ended");
     })
+    .on(RoomEvent.TrackMuted, () => renderPeople())
+    .on(RoomEvent.TrackUnmuted, () => renderPeople())
     .on(RoomEvent.ParticipantConnected, (p) => {
       if (isAgent(p)) return updateTranslatorChip();
       toast(`${p.name || p.identity} joined.`);
@@ -339,7 +369,7 @@ function wireRoom(room) {
       el.dataset.identity = participant.identity;
       document.body.appendChild(el);
       if (isAgent(participant)) watchLevel("translation", track.mediaStreamTrack, onTranslationLevel);
-      else watchLevel(participant.identity, track.mediaStreamTrack, (v) => setLevel(avatarOf(participant.identity), v));
+      else watchLevel(participant.identity, track.mediaStreamTrack, (v) => { setLevel(avatarOf(participant.identity), v); setSpeaking(participant.identity, v); });
       applyVolumes();
     })
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
@@ -377,40 +407,83 @@ function updateTranslatorChip() {
 function renderPeople() {
   if (!state.room) return;
   const me = state.me;
-  const tiles = [personTile(me.identity, me.name, me.speak, me.hear, true)];
   const others = humans();
-  for (const p of others) tiles.push(personTile(p.identity, p.name || p.identity, p.attributes.speak, p.attributes.hear, false));
-  if (!others.length) {
-    const w = document.createElement("div");
-    w.className = "person card waiting";
-    w.textContent = "Waiting for the other person - send them the invite link.";
-    tiles.push(w);
-  }
-  $("people").replaceChildren(...tiles);
+  const people = [{ identity: me.identity, name: me.name, speak: me.speak, hear: me.hear, mine: true, muted: !state.micOn },
+                  ...others.map((p) => ({ identity: p.identity, name: p.name || p.identity, speak: p.attributes.speak, hear: p.attributes.hear,
+                                          mine: false, muted: !p.isMicrophoneEnabled }))];
+  const stage = $("people");
+  stage.dataset.count = String(people.length);
+  stage.replaceChildren(...people.map(personTile));
+  if (!others.length) stage.append(el("p", { class: "waiting", text: "Waiting for others. Tap Invite to copy the link." }));
+  const names = people.map((p) => (p.mine ? "You" : p.name));
+  $("call-title").textContent = people.length === 2 ? `${names[0]}  ⇄  ${names[1]}` : people.length > 2 ? names.slice(0, 3).join(", ") + (people.length > 3 ? ` +${people.length - 3}` : "") : "";
+  $("people-count").textContent = `${people.length} ${people.length === 1 ? "person" : "people"}`;
+  $("people-list").replaceChildren(...people.map((p) => el("li", {},
+    el("span", { class: "pl-avatar", text: initials(p.name) }),
+    el("span", { class: "pl-name", text: p.mine ? `${p.name} (you)` : p.name }),
+    el("span", { class: "pl-meta", text: `speaks ${langName(p.speak)} · hears ${langName(p.hear)}${p.muted ? " · muted" : ""}` }))));
   applyVolumes();
 }
 
-function personTile(identity, name, speak, hear, mine) {
-  const el = document.createElement("div");
-  el.className = "person card" + (mine ? " me" : "");
-  el.dataset.identity = identity;
-  const av = document.createElement("div");
-  av.className = "avatar";
-  av.textContent = (name || "?").trim().slice(0, 1).toUpperCase();
-  const info = document.createElement("div");
-  const nm = document.createElement("div");
-  nm.className = "person-name";
-  nm.textContent = mine ? `${name} (you)` : name;
-  const langs = document.createElement("div");
-  langs.className = "person-langs";
-  const b1 = document.createElement("b");
-  b1.textContent = langName(speak);
-  const b2 = document.createElement("b");
-  b2.textContent = langName(hear);
-  langs.append("speaks ", b1, " · hears ", b2);
-  info.append(nm, langs);
-  el.append(av, info);
-  return el;
+const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+
+function personTile(p) {
+  const tile = el("div", { class: `person${p.mine ? " me" : ""}${p.muted ? " muted" : ""}`, "data-identity": p.identity });
+  const circle = el("div", { class: "call-avatar" }, el("div", { class: "avatar", text: initials(p.name) }));
+  if (p.muted) circle.append(el("span", { class: "muted-badge", "aria-label": "Muted", text: "" }));
+  tile.append(circle,
+    el("p", { class: "person-name", text: p.name }, p.mine ? el("span", { class: "you", text: " (you)" }) : null),
+    el("div", { class: "person-meta" },
+      el("span", { class: "lang-chip", title: `speaks ${langName(p.speak)}, hears ${langName(p.hear)}`, text: langName(p.speak) }),
+      el("span", { class: "person-state", text: p.muted ? "muted" : "listening" })));
+  return tile;
+}
+
+// The call screen's top bar, timer, panels and keys (meetmind's layout).
+function startCallChrome(roomName) {
+  const title = state.meeting ? state.meeting.title : roomName;
+  $("d-title").textContent = title;
+  $("d-code").textContent = state.meeting ? state.meeting.code : roomName;
+  $("conn-text").textContent = "Connected";
+  $("panel-assistant").closest(".key").hidden = !state.meeting;       // the assistant needs an account
+  $("noise-label").textContent = noiseName(state.me.noise);
+  const since = state.meeting?.startedAt ? new Date(state.meeting.startedAt).getTime() : Date.now();
+  clearInterval(state.elapsedTimer);
+  const tick = () => {
+    const sec = Math.max(0, Math.floor((Date.now() - since) / 1000));
+    const hh = Math.floor(sec / 3600), mm = String(Math.floor((sec % 3600) / 60)).padStart(2, "0"), ss = String(sec % 60).padStart(2, "0");
+    $("elapsed").textContent = hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
+  };
+  tick();
+  state.elapsedTimer = setInterval(tick, 1000);
+}
+const noiseName = (mode) => ({ off: "Noise: off", standard: "Noise", enhanced: "Enhanced", studio: "Studio" }[mode] || "Noise");
+
+function openPanel(name) {
+  const side = $("side");
+  const same = !side.hidden && side.dataset.panel === name;
+  for (const b of ["people", "assistant", "details"]) $(`panel-${b}`).setAttribute("aria-pressed", String(!same && b === name));
+  if (same) { side.hidden = true; side.dataset.panel = ""; return; }
+  side.hidden = false;
+  side.dataset.panel = name;
+  $("side-title").textContent = { people: "People", assistant: "Assistant", details: "Meeting details" }[name];
+  side.querySelectorAll(".side-body").forEach((b) => { b.hidden = b.dataset.panel !== name; });
+  if (name === "assistant") ensureAssistant();
+}
+
+// The assistant in the call: the same agents as the Assistant page, attached to this meeting, and the
+// same conversation Hey Mind uses, so spoken requests and their Confirm cards show up here too.
+function ensureAssistant(conversation) {
+  if (!state.meeting) return;
+  if (!state.assistant) {
+    state.assistant = new AssistantChat($("side-assistant"), {
+      meetingCode: state.meeting.code, voice: false, dark: true,
+      placeholder: "Ask the assistant… (only you see this)",
+    });
+    (conversation ? state.assistant.open(conversation) : state.assistant.openLatestForMeeting()).catch((e) => state.assistant.fail(e));
+  } else if (conversation && conversation !== state.assistant.conversationId) {
+    state.assistant.open(conversation).catch(() => {});
+  }
 }
 
 // a partner who speaks the language I hear needs no translation: play their own voice
@@ -610,6 +683,7 @@ function handleAgentMessage(m) {
         u.main.classList.remove("partial");
         setStatus(u, "voicing...");
         u.status.title = `Answered in ${m.ms} ms`;
+        if (m.conversation && state.assistant) ensureAssistant(m.conversation);   // show it (and any Confirm card) in the panel
         if (state.playing !== u && !state.playQueue.includes(u)) state.playQueue.push(u);
       }
       followFeed();
@@ -848,6 +922,7 @@ async function changeNoise() {
   await applyNoise(mode);
   await state.room?.localParticipant.setAttributes({ noise: mode });   // the agent switches BNR on or off
   savePreferences({ noise: mode });
+  $("noise-label").textContent = noiseName(mode);
   const label = $("noise-live").selectedOptions[0]?.textContent.split(" (")[0] ?? mode;
   toast(`Background noise removal: ${label}.`, { key: "noise" });
 }
@@ -855,6 +930,21 @@ async function changeNoise() {
 // ------------------------------------------------------------------ wiring
 $("join-form").addEventListener("submit", join);
 $("leave").addEventListener("click", () => leave());
+for (const name of ["people", "assistant", "details"]) $(`panel-${name}`).addEventListener("click", () => openPanel(name));
+$("side-close").addEventListener("click", () => openPanel($("side").dataset.panel));
+$("captions-toggle").addEventListener("click", () => {
+  const on = $("captions-toggle").getAttribute("aria-pressed") !== "true";
+  $("captions-toggle").setAttribute("aria-pressed", String(on));
+  $("feed").hidden = !on;
+});
+$("d-copy").addEventListener("click", () => $("copy-link").click());
+// "Ask Mind": the next sentence goes to the assistant only, as after saying "Hey Mind".
+$("ask-mind").addEventListener("click", async () => {
+  const agent = state.room && [...state.room.remoteParticipants.values()].find(isAgent);
+  if (!agent) { toast("The assistant joins with the translator. Try again in a moment."); return; }
+  await state.room.localParticipant.publishData(new TextEncoder().encode("{}"), { reliable: true, topic: "mind", destinationIdentities: [agent.identity] });
+  toast("Mind is listening: ask your question. Only you hear the answer.", { key: "mind" });
+});
 $("new-room").addEventListener("click", () => { $("room").value = newRoomName(); });
 $("mic-test").addEventListener("click", () => (state.testMic ? stopMicTest() : startMicTest()));
 $("mic-device").addEventListener("change", startMicTest);
@@ -872,7 +962,7 @@ $("voice-preview").addEventListener("click", (e) => previewVoice(pickedVoice("")
 $("voice-preview-live").addEventListener("click", (e) => previewVoice(pickedVoice("-live"), state.me?.speak, e.currentTarget));
 $("mic-live").addEventListener("change", (e) => switchDevice("audioinput", e.target.value));
 $("speaker-live").addEventListener("change", (e) => switchDevice("audiooutput", e.target.value));
-document.querySelector('button[commandfor="settings"][command="show-modal"]').addEventListener("click", refreshDevices);
+document.querySelectorAll('button[commandfor="settings"][command="show-modal"]').forEach((b) => b.addEventListener("click", refreshDevices));
 
 $("vol-translation").addEventListener("input", (e) => {
   state.translationVol = +e.target.value;
@@ -918,7 +1008,7 @@ async function loadMeeting() {
   if (meRes.status === 401) { location.assign(`/login?next=${encodeURIComponent(location.pathname)}`); return; }
   if (!mtRes.ok) throw new Error((await mtRes.json().catch(() => ({}))).detail || "Meeting not found");
   const me = await meRes.json(), { meeting, myPreferences } = await mtRes.json();
-  state.meeting = { code: meeting.joinCode, title: meeting.title, myRole: meeting.myRole };
+  state.meeting = { code: meeting.joinCode, title: meeting.title, myRole: meeting.myRole, startedAt: meeting.startedAt };
   $("name").value = me.user.displayName;
   $("name").readOnly = true;
   $("room").value = meeting.joinCode;

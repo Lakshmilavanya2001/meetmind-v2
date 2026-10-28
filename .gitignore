@@ -10,3 +10,5 @@ __pycache__/
 # local certificate exports
 caddy-root.crt
 backups/
+clients/e2e/*.png
+clients/e2e/test-results/

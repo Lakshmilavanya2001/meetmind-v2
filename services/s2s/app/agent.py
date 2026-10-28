@@ -982,6 +982,14 @@ class CallTranslator:
     def awake(self, ident: str) -> bool:
         return self.awake_until.get(ident, 0) > time.time()
 
+    def wake(self, ident: str):
+        """The caller pressed "Ask Mind": their next sentence is for the assistant, as after "Hey Mind"."""
+        caller = self.callers.get(ident)
+        if caller is None:
+            return
+        self.awake_until[ident] = time.time() + WAKE_WINDOW_S
+        self.speak_to(ident, mind.LISTENING.get(caller.speak, mind.LISTENING["en"]), caller.speak)
+
     def speak_to(self, ident: str, text: str, lang: str):
         """Say something on one caller's own track (only they hear it), after what's queued there."""
         out = self.outputs.get(ident)
@@ -996,12 +1004,13 @@ class CallTranslator:
         ident = caller.identity
         await self.send({"type": "assistant", "utt": utt_id, "state": "thinking", "question": question}, to=[ident])
         t0 = time.time()
+        conversation = None
         try:
             if self.mind_http is None:
                 self.mind_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=60))
             people = [c.name for c in self.callers.values()]
             reply = await self.voice.handle(self.mind_http, ident, caller.name, caller.speak, question, people, self.memory)
-            text = reply.text
+            text, conversation = reply.text, reply.conversation
             if reply.expects_answer:                     # "yes" / "no" / the missing detail, without "Hey Mind"
                 self.awake_until[ident] = time.time() + MIND_FOLLOWUP_S
         except Exception:  # noqa: BLE001
@@ -1010,7 +1019,7 @@ class CallTranslator:
         if LOG_TEXT:
             log.info("assistant for %s (%d ms): %s -> %s", ident, round((time.time() - t0) * 1000), question, text)
         await self.send({"type": "assistant", "utt": utt_id, "state": "answer", "question": question, "text": text,
-                         "ms": round((time.time() - t0) * 1000)}, to=[ident])
+                         "ms": round((time.time() - t0) * 1000), "conversation": conversation}, to=[ident])
         self.speak_to(ident, text, caller.speak)
 
     async def utterance_worker(self, ident: str):
@@ -1115,6 +1124,13 @@ async def entrypoint(ctx: JobContext):
     @ctx.room.on("participant_attributes_changed")
     def _(changed, p):
         later(call.reconcile())
+
+    @ctx.room.on("data_received")
+    def _(packet):
+        # The "Ask Mind" key on the call page (topic "mind"): only from people, about themselves.
+        p = getattr(packet, "participant", None)
+        if getattr(packet, "topic", "") == "mind" and p is not None and p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            call.wake(p.identity)
 
     @ctx.room.on("track_subscribed")
     def _(track, pub, p):

@@ -31,7 +31,7 @@ test("meetmind-v2: pick a voice and tone, hear a sample, join with it, change it
 
     const [joined] = await Promise.all([page.waitForResponse(`**/api/meetings/${code}/join`), page.locator("#join-btn").click()]);
     expect((await joined.request().postDataJSON()).voice).toBe("Jason.Happy");
-    await page.locator('button[commandfor="settings"][command="show-modal"]').click();
+    await page.getByRole("button", { name: "Call settings" }).click();
     await expect(page.locator("#voice-live")).toHaveValue("Jason");
     await expect(page.locator("#tone-live")).toHaveValue("Jason.Happy");
     const [saved] = await Promise.all([page.waitForResponse(`**/api/meetings/${code}/preferences`), page.locator("#tone-live").selectOption("Jason.Calm")]);

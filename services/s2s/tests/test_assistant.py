@@ -201,3 +201,23 @@ async def test_hey_mind_confirms_by_voice(client, script):
     script += [say("Nobody has spoken yet.")]
     r = await VoiceAssistant("some-demo-room").handle(None, "guest-abc", "Guest", "en", "what did they say?", [], CallMemory())
     assert r.text == "Nobody has spoken yet."
+
+
+async def test_hey_mind_and_the_call_panel_share_one_conversation(client, script):
+    from app.assistant.call import CallMemory
+    from app.assistant.voice import VoiceAssistant
+    await team(client)
+    me = (await client.get("/api/me")).json()["user"]["id"]
+    m = (await client.post("/api/meetings", json={"title": "Standup"})).json()["meeting"]
+    await client.post(f"/api/meetings/{m['joinCode']}/join", json={"speak": "en", "hear": "en"})
+    script += [route(("general", "hello")), say("Hi there.")]
+    ev = await chat(client, "hello", meetingCode=m["joinCode"])               # typed in the call's panel
+    panel = ev[0]["id"]
+    listed = (await client.get(f"/api/assistant/conversations?meeting={m['joinCode']}")).json()["conversations"]
+    assert [c["id"] for c in listed] == [panel]
+    assert (await client.get("/api/assistant/conversations?meeting=zzz-zzzz-zzz")).json()["conversations"] == []
+    script += [route(("general", "thanks")), say("You're welcome.")]
+    r = await VoiceAssistant(f"mm-{m['joinCode']}").handle(None, me, "Asha Rao", "en", "thanks", ["Asha Rao"], CallMemory())
+    assert r.conversation == panel and r.text == "You're welcome."             # Hey Mind continued it
+    items = (await client.get(f"/api/assistant/conversations/{panel}")).json()["items"]
+    assert [i["text"] for i in items if i["kind"] == "user"] == ["hello", "thanks"]

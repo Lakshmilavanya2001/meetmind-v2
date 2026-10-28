@@ -20,6 +20,7 @@ test("meetmind-v2: sign up, organisation, start and join a meeting, end for all"
     await a.getByLabel("Organisation name").fill(`Acme ${tag}`);
     await a.getByRole("button", { name: "Create account" }).click();
     await expect(a).toHaveURL(/\/dashboard$/);
+    await expect(a.locator("#admin-code")).toHaveText(/\S{6,}/);             // filled in once the dashboard has loaded
     const code = (await a.locator("#admin-code").textContent()).trim();
     expect(code.length).toBeGreaterThan(5);
 

@@ -85,66 +85,121 @@
 </main>
 
 <!-- ============================================================ call -->
-<main id="call" class="call" hidden>
+<!-- Styled as a phone call, like meetmind: people as large circles that pulse while they talk, round
+     keys with labels, the big red End key in the middle, side panels for people, the assistant and details. -->
+<main id="call" class="call call-screen" hidden>
   <p id="save-banner" class="save-banner" role="status" hidden>This meeting's transcript is being saved.</p>
-  <header class="topbar">
-    <div class="room-info">
-      <span class="dot" id="conn-dot" aria-hidden="true"></span>
-      <span class="room-label">Room <strong id="room-name"></strong></span>
+  <header class="call-top">
+    <div class="call-top-left">
+      <span class="dot" id="conn-dot" aria-hidden="true"></span><span id="conn-text" class="conn-text" role="status">Connecting…</span>
       <span id="translator" class="chip">translator joining…</span>
     </div>
-    <div class="top-actions">
+    <div class="call-top-mid">
+      <h1 id="room-name" class="call-name"></h1>
+      <span id="elapsed" class="elapsed" aria-label="Call duration">00:00</span>
+    </div>
+    <div class="call-top-right">
       <span id="latency" class="latency" title="Median time from the other person stopping to their translated voice starting"></span>
-      <button id="copy-link" class="btn ghost small" type="button" aria-label="Copy invite link">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
-        <span>Invite</span>
-      </button>
+      <span id="people-count" class="chip" title="People in the call"></span>
     </div>
   </header>
 
-  <section class="people" id="people" aria-label="People in the call"></section>
-
-  <section class="feed" id="feed" aria-live="polite" aria-relevant="additions" aria-label="Conversation">
-    <div class="empty" id="empty">
-      <p class="empty-title">Say something</p>
-      <p>Your words and their translation appear here. The other person hears you in their language.</p>
-      <p>Say “Hey Mind, …” to ask the assistant privately.</p>
+  <div class="call-body">
+    <div class="call-main">
+      <p id="call-title" class="call-title"></p>
+      <section class="people stage" id="people" aria-label="People in the call"></section>
+      <section class="feed captions" id="feed" aria-live="polite" aria-relevant="additions" aria-label="Captions">
+        <div class="empty" id="empty">
+          <p class="empty-title">Say something</p>
+          <p>Your words and their translation appear here. Everyone hears you in their language.</p>
+          <p>Say “Hey Mind, …” or tap <strong>Ask Mind</strong> to ask the assistant privately.</p>
+        </div>
+      </section>
     </div>
-  </section>
 
-  <nav class="controls" aria-label="Call controls">
-    <button id="mute" class="ctrl" type="button" aria-pressed="false">
-      <span class="ctrl-icon level-ring" id="mic-ring">
-        <svg class="i-on" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-        <svg class="i-off" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.8 5.1M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>
-      </span>
-      <span class="ctrl-label" id="mute-label">Mute</span>
-    </button>
-    <button class="ctrl" type="button" commandfor="settings" command="show-modal">
-      <span class="ctrl-icon">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-      </span>
-      <span class="ctrl-label">Settings</span>
-    </button>
-    <button id="leave" class="ctrl danger" type="button">
-      <span class="ctrl-icon">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4 12.3-4 17 0l-1.6 2.6-3.4-1.2v-2.4c-2.4-.8-4.6-.8-7 0v2.4l-3.4 1.2z"/></svg>
-      </span>
-      <span class="ctrl-label">Leave</span>
-    </button>
-    <button id="save-toggle" class="ctrl" type="button" aria-pressed="false" hidden>
-      <span class="ctrl-icon">
+    <aside id="side" class="side-panel" hidden aria-labelledby="side-title">
+      <div class="side-head">
+        <h2 id="side-title">Panel</h2>
+        <button id="side-close" class="icon-btn" type="button" aria-label="Close panel">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="side-people" class="side-body" data-panel="people" hidden><ul id="people-list" class="people-list"></ul></div>
+      <div id="side-assistant" class="side-body side-assistant" data-panel="assistant" hidden></div>
+      <div id="side-details" class="side-body" data-panel="details" hidden>
+        <dl class="details">
+          <dt>Meeting</dt><dd id="d-title"></dd>
+          <dt>Code</dt><dd id="d-code" class="code"></dd>
+          <dt>Link</dt><dd><button id="d-copy" class="btn ghost small" type="button">Copy invite link</button></dd>
+        </dl>
+        <p class="hint">Everyone speaks their own language and hears the others translated. Captions show what was said and its translation.</p>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="keys" aria-label="Call controls">
+    <div class="keys-main">
+      <div class="key">
+        <button id="mute" class="key-btn level-ring" type="button" aria-pressed="false" aria-label="Mute">
+          <span id="mic-ring" class="key-icon">
+            <svg class="i-on" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+            <svg class="i-off" aria-hidden="true" viewBox="0 0 24 24"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.8 5.1M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>
+          </span>
+        </button>
+        <span class="key-label" id="mute-label">Mute</span>
+      </div>
+      <div class="key">
+        <button class="key-btn" type="button" commandfor="settings" command="show-modal" aria-label="Language and voice">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h9M8.5 3v2M6 5c0 4 3 7 6 8M11 5c0 4-3 8-7 9M13 21l4-9 4 9M14.5 18h5"/></svg>
+        </button>
+        <span class="key-label">Language</span>
+      </div>
+      <div class="key">
+        <button id="leave" class="key-btn key-end" type="button" aria-label="Leave the call">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4 12.3-4 17 0l-1.6 2.6-3.4-1.2v-2.4c-2.4-.8-4.6-.8-7 0v2.4l-3.4 1.2z"/></svg>
+        </button>
+        <span class="key-label">End</span>
+      </div>
+      <div class="key">
+        <button id="captions-toggle" class="key-btn" type="button" aria-pressed="true" aria-label="Captions">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M7 14h7M13 10h4"/></svg>
+        </button>
+        <span class="key-label">Captions</span>
+      </div>
+      <div class="key">
+        <button class="key-btn" type="button" commandfor="settings" command="show-modal" aria-label="Noise removal">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 11v2"/></svg>
+        </button>
+        <span class="key-label" id="noise-label">Noise</span>
+      </div>
+    </div>
+    <div class="keys-more">
+      <div class="key small"><button id="panel-people" class="key-btn" type="button" aria-pressed="false" aria-label="People">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/></svg>
+      </button><span class="key-label">People</span></div>
+      <div class="key small"><button id="panel-assistant" class="key-btn" type="button" aria-pressed="false" aria-label="Assistant">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/></svg>
+      </button><span class="key-label">Assistant</span></div>
+      <div class="key small"><button id="ask-mind" class="key-btn" type="button" aria-label="Ask Mind by voice: your next sentence goes to the assistant only">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M19 3l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/></svg>
+      </button><span class="key-label">Ask Mind</span></div>
+      <div class="key small" id="save-key" hidden><button id="save-toggle" class="key-btn" type="button" aria-pressed="false" aria-label="Save transcript">
         <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="9"/></svg>
-      </span>
-      <span class="ctrl-label" id="save-label">Save transcript</span>
-    </button>
-    <button id="end-all" class="ctrl danger" type="button" hidden>
-      <span class="ctrl-icon">
+      </button><span class="key-label" id="save-label">Save transcript</span></div>
+      <div class="key small"><button id="copy-link" class="key-btn" type="button" aria-label="Copy invite link">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+      </button><span class="key-label">Invite</span></div>
+      <div class="key small"><button id="panel-details" class="key-btn" type="button" aria-pressed="false" aria-label="Meeting details">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+      </button><span class="key-label">Details</span></div>
+      <div class="key small"><button class="key-btn" type="button" commandfor="settings" command="show-modal" aria-label="Call settings">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button><span class="key-label">Settings</span></div>
+      <div class="key small" id="end-all-key" hidden><button id="end-all" class="key-btn key-danger" type="button" aria-label="End the meeting for everyone">
         <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-      </span>
-      <span class="ctrl-label">End for all</span>
-    </button>
-  </nav>
+      </button><span class="key-label">End for all</span></div>
+    </div>
+  </footer>
 </main>
 
 <!-- ============================================================ settings -->
@@ -207,6 +262,7 @@
 <!-- toasts: one manual popover in the top layer holding the stack -->
 <div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
 
+<script src="/assistant-chat.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

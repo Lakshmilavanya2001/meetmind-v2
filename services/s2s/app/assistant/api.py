@@ -104,10 +104,12 @@ async def chat(body: ChatIn, ctx: Ctx = Depends(current)):
 
 
 @router.get("/api/assistant/conversations")
-async def conversations(ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
+async def conversations(meeting: str | None = None, ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
+    """My conversations, newest first; `meeting` keeps the ones attached to that meeting (the call's panel)."""
     rows = (await s.execute(text("SELECT c.id, c.title, c.updated_at, m.join_code, m.title AS meeting_title FROM agent_conversations c "
                                  "LEFT JOIN meetings m ON m.id = c.meeting_id WHERE c.user_id = :u AND c.organization_id = :o "
-                                 "ORDER BY c.updated_at DESC LIMIT 50"), {"u": ctx.user.id, "o": ctx.org.id})).mappings().all()
+                                 + ("AND m.join_code = :code " if meeting else "") +
+                                 "ORDER BY c.updated_at DESC LIMIT 50"), {"u": ctx.user.id, "o": ctx.org.id, "code": meeting})).mappings().all()
     return {"conversations": [{"id": str(r["id"]), "title": r["title"], "updatedAt": r["updated_at"].isoformat(),
                                "meeting": {"code": r["join_code"], "title": r["meeting_title"]} if r["join_code"] else None} for r in rows]}
 
@@ -233,9 +235,13 @@ class SpeakIn(BaseModel):
     lang: str | None = Field(default=None, pattern="^(en|hi)$")
 
 
+SPEAK_RATE = 22050
+
+
 @router.post("/api/assistant/speak")
-async def speak(body: SpeakIn, ctx: Ctx = Depends(current)):
-    """The assistant's reply read aloud by Magpie (WAV), in English or Hindi (from its script if not given)."""
+async def speak(body: SpeakIn, stream: bool = False, ctx: Ctx = Depends(current)):
+    """The assistant's reply read aloud by Magpie, in English or Hindi (from its script if not given): a WAV,
+    or with ?stream=1 raw 16-bit mono PCM at 22.05 kHz streamed while Magpie speaks (first sound in ~0.1 s)."""
     import re
 
     import aiohttp as _aiohttp
@@ -253,7 +259,28 @@ async def speak(body: SpeakIn, ctx: Ctx = Depends(current)):
     form.add_field("language", voices.MAGPIE_LOCALE[lang])
     form.add_field("text", said)
     form.add_field("voice", voices.magpie_name(by_lang, lang, ASSISTANT_VOICE))
-    form.add_field("sample_rate_hz", "22050")
+    form.add_field("sample_rate_hz", str(SPEAK_RATE))
+    if stream:
+        http = http_session()
+        try:
+            r = await http.post(f"{voices.MAGPIE_TTS_URL}/audio/synthesize_online", data=form)
+        except _aiohttp.ClientError:
+            await http.close()
+            raise HTTPException(502, "Spoken replies aren't available right now.") from None
+        if r.status != 200 or "json" in r.headers.get("content-type", ""):
+            r.release()
+            await http.close()
+            raise HTTPException(502, "Spoken replies aren't available right now.")
+
+        async def pcm():
+            try:
+                async for chunk in r.content.iter_any():
+                    yield chunk
+            finally:
+                r.release()
+                await http.close()
+        return StreamingResponse(pcm(), media_type="application/octet-stream",
+                                 headers={"cache-control": "no-store", "x-sample-rate": str(SPEAK_RATE)})
     try:
         async with http_session() as http, http.post(f"{voices.MAGPIE_TTS_URL}/audio/synthesize", data=form) as r:
             if r.status != 200:

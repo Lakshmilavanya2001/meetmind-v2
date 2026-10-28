@@ -19,17 +19,26 @@ test("meetmind-v2: talk to the assistant and hear its reply", async () => {
       data: { name: "Asha Rao", email: `asha-${tag}@v2.test`, password: "correct-horse-1", organization: `Acme ${tag}` } })).ok()).toBeTruthy();
     await page.goto("/assistant");
     const heard = page.waitForResponse("**/api/assistant/transcribe**", { timeout: 60_000 });
-    const spoken = page.waitForResponse("**/api/assistant/speak", { timeout: 120_000 });
-    await page.getByRole("button", { name: "Speak to the assistant" }).click();
-    await expect(page.locator("#voice-status")).toHaveText(/Listening/);
+    const spoken = page.waitForResponse("**/api/assistant/speak**", { timeout: 120_000 });
+    const mic = page.getByRole("button", { name: /Microphone for the assistant/ });
+    await mic.click();
+    await expect(page.locator(".voice-status")).toHaveText(/Listening|Hearing/);
     const t = await (await heard).json();
     expect(t.text.toLowerCase()).toContain("launch review");
     await expect(page.locator(".msg.user").last()).toContainText(/launch review/i);
     await expect(page.locator(".msg.assistant").last()).toBeVisible({ timeout: 60_000 });
     const s = await spoken;
     expect(s.status()).toBe(200);
-    expect(s.headers()["content-type"]).toContain("audio/wav");
-    await expect(page.locator("#voice-status")).toHaveText(/Speaking|Tap the mic/, { timeout: 30_000 });
+    expect(s.headers()["x-sample-rate"]).toBe("22050");
+    expect(s.url()).toContain("stream=1");                         // streamed: speech starts as soon as the text arrives
+    // The mic stays on: after the reply it listens again, until it's turned off.
+    await expect(page.locator(".voice-status")).toHaveText(/Listening|Hearing|Working|Thinking|Speaking/, { timeout: 30_000 });
+    await expect(mic).toHaveAttribute("aria-pressed", "true");
+    await page.waitForTimeout(8000);
+    await expect(mic).toHaveAttribute("aria-pressed", "true");
+    await mic.click();
+    await expect(mic).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator(".voice-status")).toHaveText(/Mic off/);
   } finally {
     await browser.close();
   }
@@ -45,9 +54,9 @@ test("meetmind-v2: a blocked microphone is explained next to the mic button", as
     expect((await page.request.post("/api/auth/signup", { headers: { origin: BASE },
       data: { name: "Asha Rao", email: `asha-${tag}@v2.test`, password: "correct-horse-1", organization: `Acme ${tag}` } })).ok()).toBeTruthy();
     await page.goto("/assistant");
-    await page.getByRole("button", { name: "Speak to the assistant" }).click();
-    await expect(page.locator("#voice-status")).toHaveText(/blocked|No microphone|didn't start/i, { timeout: 15_000 });
-    await expect(page.locator("#mic")).toHaveAttribute("aria-pressed", "false");
+    await page.getByRole("button", { name: /Microphone for the assistant/ }).click();
+    await expect(page.locator(".voice-status")).toHaveText(/blocked|No microphone|didn't start/i, { timeout: 15_000 });
+    await expect(page.locator(".mic")).toHaveAttribute("aria-pressed", "false");
   } finally {
     await browser.close();
   }

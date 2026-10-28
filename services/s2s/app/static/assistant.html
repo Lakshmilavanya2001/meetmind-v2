@@ -20,26 +20,10 @@
     <button id="new-chat" class="btn primary small" type="button">New chat</button>
     <ul id="convs" class="convs"></ul>
   </aside>
-  <section class="chat card" aria-label="Chat">
-    <p id="attached" class="save-banner" hidden></p>
-    <ol id="log" class="chat-log" aria-live="polite"></ol>
-    <p id="err" class="error" role="alert" hidden></p>
-    <div class="voice-bar">
-      <button id="mic" class="mic" type="button" aria-pressed="false" aria-label="Speak to the assistant">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-      </button>
-      <span id="voice-status" class="voice-status" aria-live="polite">Tap the mic and speak</span>
-      <label class="voice-opt"><span class="sr-only">Language</span><select id="voice-lang"><option value="en">English</option><option value="hi">हिंदी</option></select></label>
-      <label class="voice-opt"><input type="checkbox" id="hands-free"> Hands-free</label>
-    </div>
-    <form id="chat-form" class="chat-form">
-      <label for="msg" class="sr-only">Message</label>
-      <textarea id="msg" rows="2" maxlength="4000" placeholder="Schedule a review with Priya tomorrow at 4 pm · What did we decide about the budget? · Book a table for 3 on Friday"></textarea>
-      <button id="send" class="btn primary" type="submit">Send</button>
-    </form>
-  </section>
+  <section id="chat" class="chat card" aria-label="Chat"></section>
 </main>
 <script src="/common.js"></script>
+<script src="/assistant-chat.js"></script>
 <script src="/assistant.js"></script>
 </body>
 </html>

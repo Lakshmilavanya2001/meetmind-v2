@@ -6,6 +6,7 @@ repo started from, plus MeetMind's accounts, meetings and agents, ported to Pyth
 
 | | |
 |---|---|
+| **Call screen** | styled as a phone call, like MeetMind: each person a large circle that pulses while they talk (language, speaking / listening / muted), round keys with the big red End key in the middle (Mute, Language, End, Captions, Noise; People, Assistant, Ask Mind, Save transcript, Invite, Details, Settings, End for all), side panels, running timer |
 | **Calls** | live speech-to-speech translation (Parakeet → Qwen → Magpie), live captions, echo protection, noise removal (browser RNNoise or NVIDIA BNR "Studio"), your own voice and tone (Magpie's catalogue, with a sample) |
 | **Accounts** | organisations with join codes, sign-in sessions, meetings (start now, schedule, invite, end for all) |
 | **Transcripts** | saved only when the host turns it on; summaries with decisions and action items; questions answered with verified citations; retention and delete |
@@ -526,15 +527,22 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
 - **Dates** (`dates.py`): dateparser plus rules for weekdays, "tonight", "in 2 hours" and bare
   times ("at 4" without am/pm is read as 4 pm, and the user is told). The model never does date
   arithmetic.
-- **Talk to it on the Assistant page:** tap the mic and speak, in English or Hindi.
-  - Listening stops after a 1.1 s pause, or at 30 s.
-  - The browser records 16 kHz audio, Parakeet turns it into text (about 0.1 s), and the agents
-    reply in voice mode (one or two short sentences).
-  - Magpie reads the reply aloud, in the assistant's voice (`S2S_ASSISTANT_VOICE`), in about 0.2–0.4 s.
-  - For an action, it reads out what it will do; say **yes** or **no** (the Confirm card works too).
-  - **Hands-free** listens again after each reply. Tapping the mic interrupts the reply.
-  - Routes: `POST /api/assistant/transcribe?lang=en|hi` (a WAV recording) and `POST /api/assistant/speak`
-    (WAV out); chat takes `voice: true`.
+- **Talk to it on the Assistant page:**
+  - Turn the mic on; it stays on until you turn it off.
+  - Each sentence you say (ended by a pause of about 0.9 s) goes to Parakeet for text, then to the
+    agents in voice mode.
+  - Each piece of the reply is spoken by Magpie as soon as it arrives. The audio is streamed
+    (`POST /api/assistant/speak?stream=1`, raw 16-bit 22.05 kHz audio, first sound in about 0.01 s on
+    this network), so speech starts with the text.
+  - While the assistant thinks and speaks, the mic is held (not sent), so it doesn't hear itself, and
+    then it listens again.
+  - Say **yes** or **no** to a waiting action. Turning the mic off also stops the speech.
+  - The chat itself is one component (`static/assistant-chat.js`) used here and in calls.
+- **The assistant inside a call:**
+  - The call screen's **Assistant** key opens a panel with the same agents, attached to the meeting.
+  - Only you see it. It's the same conversation Hey Mind uses, so spoken requests and their Confirm
+    cards show up there too.
+  - **Ask Mind** makes your next sentence go to the assistant only, like saying "Hey Mind".
 - **In a call** (`voice.py`): "Hey Mind" goes through the same agents in voice mode: one or two spoken
   sentences, on the asker's own track. Each caller has one conversation per meeting, also shown on
   their Assistant page. For an action, Mind reads out what it will do and the caller says **yes**

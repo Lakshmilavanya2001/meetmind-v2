@@ -33,6 +33,7 @@ SAY_YES = {"en": "Say yes to go ahead, or no to cancel.", "hi": "आगे ब�
 class Reply:
     text: str
     expects_answer: bool = False        # keep listening for a short while without the wake phrase
+    conversation: str | None = None     # the assistant conversation it went into (shown in the call's panel)
 
 
 class VoiceAssistant:
@@ -40,7 +41,14 @@ class VoiceAssistant:
 
     def __init__(self, room_name: str):
         self.room_name = room_name
-        self.conversations: dict[str, str] = {}
+
+    async def _conversation(self, s, user_id) -> str | None:
+        """The caller's latest assistant conversation in this meeting: Hey Mind and the call's assistant
+        panel share it, so spoken requests and their confirmations show up in the panel too."""
+        cid = (await s.execute(text(
+            "SELECT c.id FROM agent_conversations c JOIN meetings m ON m.id = c.meeting_id "
+            "WHERE c.user_id = :u AND m.room_name = :r ORDER BY c.updated_at DESC LIMIT 1"), {"u": user_id, "r": self.room_name})).scalar()
+        return str(cid) if cid else None
 
     async def _asker(self, s, identity: str):
         try:
@@ -67,7 +75,7 @@ class VoiceAssistant:
             a, code = await self._asker(s, identity)
             if a is None:                                 # not an account (open demo room)
                 return Reply(await call.answer(http, question, name, lang, people, memory))
-            cid = self.conversations.get(identity)
+            cid = await self._conversation(s, a.user_id)
             if cid:
                 pending = (await s.execute(text("SELECT id FROM agent_actions WHERE conversation_id = :c AND status = 'PENDING_CONFIRMATION' "
                                                 "AND created_at > now() - interval '15 minutes' ORDER BY created_at DESC LIMIT 1"),
@@ -79,11 +87,11 @@ class VoiceAssistant:
                         said = r["message"]["content"].replace("✓ Done:", "Done:")
                     except ToolError as e:
                         said = e.message
-                    return Reply(llm.to_speech(said))
+                    return Reply(llm.to_speech(said), conversation=cid)
             texts, waiting = [], False
             async for ev in engine.run_turn(s, http, a, question, cid, code, channel="voice", language=lang, call_memory=memory):
                 if ev["type"] == "conversation":
-                    self.conversations[identity] = ev["id"]
+                    cid = ev["id"]
                 elif ev["type"] == "text":
                     texts.append(ev["text"])
                 elif ev["type"] == "guard":
@@ -93,4 +101,4 @@ class VoiceAssistant:
             said = llm.to_speech(" ".join(texts[-2:]) if texts else "Sorry, I didn't get that.")
             if waiting:
                 said = f"{said} {SAY_YES.get(lang, SAY_YES['en'])}"
-            return Reply(said, expects_answer=waiting or said.rstrip().endswith("?"))
+            return Reply(said, expects_answer=waiting or said.rstrip().endswith("?"), conversation=cid)
