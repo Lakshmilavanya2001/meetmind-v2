@@ -10,7 +10,7 @@ repo started from, plus MeetMind's accounts, meetings and agents, ported to Pyth
 | **Accounts** | organisations with join codes, sign-in sessions, meetings (start now, schedule, invite, end for all) |
 | **Transcripts** | saved only when the host turns it on; summaries with decisions and action items; questions answered with verified citations; retention and delete |
 | **Assistant** | chat page and "Hey Mind" in calls; agents for meetings, knowledge, food, cabs/Uber, tables, movies, reminders (SMS), and a planner; every change waits for Confirm |
-| **Missing compared with MeetMind** | video, screen sharing, in-call text chat, email invitations, Google/Outlook calendars |
+| **Missing compared with MeetMind** | video, screen sharing, in-call text chat, ringing calls ("call Rahul"), email invitations, Google/Outlook calendars |
 
 ## Deploy (meetmind-v2)
 
@@ -51,7 +51,7 @@ Restore instructions are in the script; a restore was tested on 2026-10-28. Run 
   and deletes old read notifications;
 - `TRANSCRIPT_RETENTION_DAYS` deletes saved transcripts that many days after a meeting ends;
 - hosts can delete a meeting's transcript;
-- CI (`.github/workflows/ci.yml`) runs lint, the 140 tests against a throwaway Postgres, and the
+- CI (`.github/workflows/ci.yml`) runs lint, the 144 tests against a throwaway Postgres, and the
   page script checks on every push.
 
 **Not done:** a load test of concurrent calls (the model servers are shared with MeetMind, so a
@@ -432,6 +432,7 @@ language, voice and noise choices are remembered per meeting.
 |---|---|
 | Who joins | the host, invited people, and any member of the same organisation with the link; other organisations get "not found" |
 | Who invites and ends | the host and co-hosts; ending closes the LiveKit room and everyone is told "The host ended the meeting" |
+| Invitations | each invited person accepts or declines on the dashboard (or asks the assistant); the host is notified; a declined meeting doesn't count as busy |
 | Empty meetings | a live meeting whose room has closed (everyone left) for 2 minutes is ended by the watchdog |
 | Sessions | a random 32-byte cookie (`mm2_session`, HttpOnly, Secure, SameSite=Lax), only its SHA-256 stored, 30 days, sliding |
 | Passwords | argon2id, at least 10 characters; login rate-limited per address and per email |
@@ -445,7 +446,7 @@ is off unless `ALLOW_ANONYMOUS_ROOMS=1`; the test clients sign up test users ins
 
 API: `POST /api/auth/signup|login|logout`, `GET|PATCH /api/me`, `GET /api/org/members`,
 `POST /api/meetings`, `GET /api/meetings`, `GET /api/meetings/<code>`,
-`POST /api/meetings/<code>/invite|join|end`, `POST /api/meetings/<code>/transcript` (save on/off),
+`POST /api/meetings/<code>/invite|join|end|rsvp`, `POST /api/meetings/<code>/transcript` (save on/off),
 `GET /api/meetings/<code>/transcript?lang=`, `POST /api/meetings/<code>/summary`, `POST /api/ask`.
 
 **Saved transcripts, summaries and questions** (phase 3, 2026-10-28):
@@ -500,10 +501,10 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
   to three specialists, in order: Meetings & calls, Meeting knowledge, Food & dining, Travel,
   Movies, Reminders, Planner, General. Each specialist runs the tool loop (`engine.py`) with **only
   its own tools**. A specialist that asks a question pauses the rest until the user answers.
-- **42 tools** (`tools/`): people and meetings (search people, list meetings and participants,
+- **45 tools** (`tools/`): people and meetings (search people, list meetings and participants, join links, accepting or declining invitations,
   availability and free slots from MeetMind's own calendar, start, schedule, invite, reschedule,
   cancel, remove, end, transcript saving on/off, what was just said in the call); knowledge
-  (transcript, summary, action items, cited answers); sandbox food, cabs, tables and movies
+  (transcript, summary, action items, transcript search, cited answers); sandbox food, cabs, tables and movies
   (`app/commerce`); reminders by notification or SMS (`app/reminders`); Uber (`app/uber`, connect in
   **Settings**).
 - **Nothing changes without the user.** Reading runs at once. Anything that changes something
@@ -560,7 +561,7 @@ event per line: `conversation`, `handoff`, `tool_start`, `tool_end`, `confirmati
 `GET /api/bookings`, `POST /api/bookings/<id>/cancel`, `/api/rides[/<id>[/cancel|advance]]`, `/api/reminders`, `/api/notifications`,
 `/api/profile/phone|sms`, `/api/integrations/uber/*`.
 
-**Tests.** 140 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
+**Tests.** 144 unit and API tests (`services/s2s/tests`, against a `*_test` database; the same run in CI):
 
 ```bash
 docker run --rm --network host -e TEST_DATABASE_URL=postgresql+asyncpg://meetmind:<DB_PASSWORD>@127.0.0.1:5434/meetmind_v2_test \

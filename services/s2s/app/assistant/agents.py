@@ -36,12 +36,14 @@ PLANNER_FOCUS = """You turn a goal into one concrete plan.
 
 SPECIALISTS: list[Specialist] = [
     Specialist("meetings", "Meetings & calls",
-               "Scheduling, rescheduling and cancelling meetings; checking availability and free slots; inviting people; starting meetings; "
+               "Scheduling, rescheduling and cancelling meetings; checking availability and free slots; inviting people; starting and joining meetings; "
+               "accepting or declining invitations; "
                "who is in a meeting; removing people; ending meetings; saving the call's transcript; setting up a meeting that was just agreed on in a call.",
                "You handle meetings and calls: scheduling, availability, invitations and running the live call. To set up a meeting agreed on "
                "in a call, read get_recent_conversation first.",
                ["resolve_datetime", "search_users", "list_team_members", "get_current_meeting", "list_meetings", "get_meeting_participants",
-                "start_instant_meeting", "create_meeting", "invite_participants", "get_user_availability", "find_free_slots",
+                "start_instant_meeting", "create_meeting", "join_meeting", "invite_participants", "get_user_availability", "find_free_slots",
+                "respond_to_invitation",
                 "reschedule_meeting", "cancel_meeting", "remove_participant", "end_meeting", "get_recent_conversation", "set_call_transcription"]),
     Specialist("knowledge", "Meeting knowledge",
                "Questions about what was said or decided in meetings; transcripts; summaries; action items from meetings; searching across "
@@ -49,7 +51,7 @@ SPECIALISTS: list[Specialist] = [
                "You answer questions about meetings from their transcripts and summaries. Relay grounded answers faithfully with their "
                "citations, and say plainly when there isn't enough information.",
                ["resolve_datetime", "get_current_meeting", "list_meetings", "get_meeting_participants", "get_meeting_transcript",
-                "summarize_meeting", "extract_action_items", "answer_meeting_question", "get_recent_conversation"]),
+                "summarize_meeting", "extract_action_items", "answer_meeting_question", "search_transcripts", "get_recent_conversation"]),
     Specialist("dining", "Food & dining",
                "Ordering food for delivery, finding restaurants and menus, reserving restaurant tables, and listing or cancelling food orders "
                "and table reservations.",

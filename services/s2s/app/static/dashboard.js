@@ -48,6 +48,27 @@ function renderMeetings(list) {
       t.textContent = "Transcript";
       right.append(t);
     }
+    // An invitation: accept or decline it (the host is told). Declined meetings don't count as busy.
+    if (m.myRole && m.myRole !== "HOST" && (m.status === "SCHEDULED" || m.status === "LIVE")) {
+      if (m.myRsvp === "PENDING") {
+        for (const [label, response] of [["Accept", "accept"], ["Decline", "decline"]]) {
+          const b = document.createElement("button");
+          b.className = "btn ghost small";
+          b.type = "button";
+          b.textContent = label;
+          b.addEventListener("click", async () => {
+            b.disabled = true;
+            try { await api(`/api/meetings/${m.joinCode}/rsvp`, { response }); await load(); } catch (e) { b.disabled = false; fail(e); }
+          });
+          right.append(b);
+        }
+      } else if (m.myRsvp) {
+        const r = document.createElement("span");
+        r.className = "badge";
+        r.textContent = m.myRsvp === "ACCEPTED" ? "going" : "declined";
+        right.append(r);
+      }
+    }
     if (m.status === "LIVE" || m.status === "SCHEDULED") {
       const a = document.createElement("a");
       a.className = "btn primary small";

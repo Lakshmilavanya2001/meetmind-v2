@@ -110,6 +110,7 @@ async def busy(t: ToolContext, user_ids: list[uuid.UUID], start: datetime, end: 
         select(MeetingParticipant.user_id, Meeting.scheduled_start, Meeting.scheduled_end, Meeting.title, Meeting.id)
         .join(Meeting, Meeting.id == MeetingParticipant.meeting_id)
         .where(MeetingParticipant.user_id.in_(user_ids), MeetingParticipant.removed_at.is_(None),
+               MeetingParticipant.rsvp != "DECLINED",                 # a declined meeting isn't busy time
                Meeting.status.in_(("SCHEDULED", "LIVE")), Meeting.scheduled_start < end, Meeting.scheduled_end > start)
         .order_by(Meeting.scheduled_start))).all()
     out: dict = {u: [] for u in user_ids}
@@ -278,7 +279,7 @@ async def get_current_meeting(t: ToolContext, a: NoArgs) -> ToolOutput:
 async def list_meetings(t: ToolContext, a: ListMeetingsArgs) -> ToolOutput:
     status = {"upcoming": ("SCHEDULED", "LIVE"), "past": ("ENDED",), "cancelled": ("CANCELLED",)}[a.scope]
     when = func.coalesce(Meeting.scheduled_start, Meeting.started_at, Meeting.created_at)
-    stmt = (select(Meeting, User.display_name, MeetingParticipant.role)
+    stmt = (select(Meeting, User.display_name, MeetingParticipant.role, MeetingParticipant.rsvp)
             .join(MeetingParticipant, and_(MeetingParticipant.meeting_id == Meeting.id, MeetingParticipant.user_id == t.user_id))
             .join(User, User.id == Meeting.host_id)
             .where(Meeting.organization_id == t.org_id, MeetingParticipant.removed_at.is_(None), Meeting.status.in_(status))
@@ -290,9 +291,9 @@ async def list_meetings(t: ToolContext, a: ListMeetingsArgs) -> ToolOutput:
     if a.to:
         stmt = stmt.where(when < a.to)
     items = []
-    for m, host, role in (await t.s.execute(stmt)).all():
+    for m, host, role, rsvp in (await t.s.execute(stmt)).all():
         count = (await t.s.execute(select(func.count()).select_from(MeetingParticipant).where(MeetingParticipant.meeting_id == m.id, MeetingParticipant.removed_at.is_(None)))).scalar()
-        items.append({"code": m.join_code, "title": m.title, "status": m.status, "myRole": role, "host": host, "people": count,
+        items.append({"code": m.join_code, "title": m.title, "status": m.status, "myRole": role, "myRsvp": rsvp.lower(), "host": host, "people": count,
                       "when": fmt_when(t, m.scheduled_start or m.started_at, m.scheduled_end or m.ended_at), "link": f"/meetings/{m.join_code}"})
     return ToolOutput({"meetings": items}, f"{len(items)} meeting(s)")
 
@@ -302,7 +303,8 @@ async def get_meeting_participants(t: ToolContext, a: MeetingArg) -> ToolOutput:
     rows = (await t.s.execute(select(MeetingParticipant, User).join(User, User.id == MeetingParticipant.user_id)
                               .where(MeetingParticipant.meeting_id == m.id, MeetingParticipant.removed_at.is_(None))
                               .order_by(MeetingParticipant.role, User.display_name))).all()
-    people = [{"id": str(u.id), "name": u.display_name, "email": u.email, "role": p.role, "joined": p.first_joined_at is not None} for p, u in rows]
+    people = [{"id": str(u.id), "name": u.display_name, "email": u.email, "role": p.role, "rsvp": p.rsvp.lower(),
+               "joined": p.first_joined_at is not None} for p, u in rows]
     return ToolOutput({"meeting": {"title": m.title, "code": m.join_code, "status": m.status}, "participants": people},
                       f"{len(people)} participant(s)")
 
@@ -374,7 +376,8 @@ async def start_instant_meeting(t: ToolContext, a: TitleArg) -> ToolOutput:
     m = Meeting(organization_id=t.org_id, host_id=t.user_id, title=(a.title or "Meeting").strip(), join_code=code, room_name=f"mm-{code}")
     t.s.add(m)
     await t.s.flush()
-    t.s.add(MeetingParticipant(meeting_id=m.id, user_id=t.user_id, role="HOST", invited_at=datetime.now(timezone.utc)))
+    now = datetime.now(timezone.utc)
+    t.s.add(MeetingParticipant(meeting_id=m.id, user_id=t.user_id, role="HOST", invited_at=now, rsvp="ACCEPTED", responded_at=now))
     await audit(t.s, "meeting.create", t.org_id, t.user_id, "Meeting", m.id, via="assistant")
     await t.s.commit()
     return ToolOutput({"code": code, "title": m.title, "joinLink": f"/m/{code}"}, f"Started “{m.title}”", link=f"/m/{code}")
@@ -406,7 +409,7 @@ async def create_meeting(t: ToolContext, a: CreateArgs) -> ToolOutput:
     t.s.add(m)
     await t.s.flush()
     now = datetime.now(timezone.utc)
-    t.s.add(MeetingParticipant(meeting_id=m.id, user_id=t.user_id, role="HOST", invited_at=now))
+    t.s.add(MeetingParticipant(meeting_id=m.id, user_id=t.user_id, role="HOST", invited_at=now, rsvp="ACCEPTED", responded_at=now))
     for u in people:
         t.s.add(MeetingParticipant(meeting_id=m.id, user_id=u.id, role="ATTENDEE", invited_at=now))
     await audit(t.s, "meeting.create", t.org_id, t.user_id, "Meeting", m.id, invited=len(people), scheduled=True, via="assistant")
@@ -440,7 +443,7 @@ async def invite_participants(t: ToolContext, a: InviteArgs) -> ToolOutput:
             t.s.add(MeetingParticipant(meeting_id=m.id, user_id=u.id, role="ATTENDEE", invited_at=now))
             added.append(u)
         elif p.removed_at is not None:
-            p.removed_at, p.invited_at = None, now
+            p.removed_at, p.invited_at, p.rsvp, p.responded_at = None, now, "PENDING", None
             added.append(u)
     await audit(t.s, "meeting.invite", t.org_id, t.user_id, "Meeting", m.id, added=len(added), via="assistant")
     await t.s.commit()
@@ -580,6 +583,34 @@ async def set_call_transcription(t: ToolContext, a: TranscriptionArgs) -> ToolOu
     return ToolOutput({"saveTranscript": a.enabled}, "Saving the transcript" if a.enabled else "Stopped saving the transcript", link=f"/meetings/{m.join_code}")
 
 
+class RsvpArgs(BaseModel):
+    meeting: str = Field(min_length=1, max_length=300, description=MEETING_DESC)
+    response: Literal["accept", "decline"]
+
+
+async def join_meeting(t: ToolContext, a: MeetingArg) -> ToolOutput:
+    m, _ = await get_meeting(t, a.meeting, need_participant=False)      # anyone in the organisation may join by link
+    if m.status == "CANCELLED":
+        raise ToolError("CONFLICT", "That meeting was cancelled.")
+    if m.status == "ENDED":
+        raise ToolError("CONFLICT", "That meeting has ended.")
+    return ToolOutput({"title": m.title, "status": m.status, "when": fmt_when(t, m.scheduled_start or m.started_at, m.scheduled_end),
+                       "joinLink": f"/m/{m.join_code}", "note": "Give the user this link; you can't join for them."},
+                      f"Join link for “{m.title}”", link=f"/m/{m.join_code}")
+
+
+async def respond_to_invitation(t: ToolContext, a: RsvpArgs) -> ToolOutput:
+    from fastapi import HTTPException
+    m, me = await get_meeting(t, a.meeting, need_participant=False)
+    user = await t.s.get(User, t.user_id)
+    try:
+        status = await mt.respond(t.s, m, me, user, a.response)
+    except HTTPException as e:
+        raise ToolError("NOT_FOUND" if e.status_code == 404 else "CONFLICT", e.detail) from None
+    return ToolOutput({"meeting": m.title, "rsvp": status.lower(), "hostNotified": True},
+                      "Accepted" if status == "ACCEPTED" else "Declined", link=f"/meetings/{m.join_code}")
+
+
 TOOLS = [
     Tool("resolve_datetime", "read", "Convert a natural-language date/time (\"tomorrow at 3 PM\", \"Friday 11am for 45 minutes\", \"next Monday\") into exact "
          "ISO timestamps in the user's time zone. ALWAYS use this instead of calculating dates yourself.", ResolveArgs, resolve_datetime,
@@ -601,6 +632,10 @@ TOOLS = [
          "local, Mon–Fri). Internal calendar only.", FreeSlotsArgs, find_free_slots, label=lambda a: "Finding a time that works"),
     Tool("get_recent_conversation", "read", "What was said in the current call recently (who said what). Use to set up a meeting agreed on in the call or answer "
          "\"what did X just say\".", RecentArgs, get_recent_conversation, label=lambda a: "Reading what was just said"),
+    Tool("join_meeting", "read", "Get the link the user opens to join a meeting (you cannot join on their behalf).", MeetingArg, join_meeting,
+         label=lambda a: "Getting the join link"),
+    Tool("respond_to_invitation", "write", "Accept or decline the user's own invitation to a meeting. The host is notified.", RsvpArgs,
+         respond_to_invitation, label=lambda a: "Accepting invitation" if a.response == "accept" else "Declining invitation"),
     Tool("start_instant_meeting", "write", "Start a new meeting right now, hosted by the user. Returns the join link.", TitleArg, start_instant_meeting,
          label=lambda a: "Starting a meeting"),
     Tool("create_meeting", "sensitive", "Schedule a future meeting and invite workspace members. Get times from resolve_datetime and people from search_users "

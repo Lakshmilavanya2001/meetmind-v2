@@ -49,7 +49,8 @@ def meeting_view(m: Meeting, me: MeetingParticipant | None = None, host: User | 
             "startedAt": iso(m.started_at), "endedAt": iso(m.ended_at),
             "host": {"id": str(host.id), "displayName": host.display_name} if host else {"id": str(m.host_id)},
             "saveTranscript": m.save_transcript,
-            "myRole": me.role if me and not me.removed_at else None}
+            "myRole": me.role if me and not me.removed_at else None,
+            "myRsvp": me.rsvp if me and not me.removed_at else None}
 
 
 async def load(s: AsyncSession, ctx: Ctx, code: str) -> tuple[Meeting, MeetingParticipant | None]:
@@ -101,7 +102,7 @@ async def create(body: CreateIn, ctx: Ctx = Depends(current), s: AsyncSession = 
     s.add(m)
     await s.flush()
     now = datetime.now(timezone.utc)
-    s.add(MeetingParticipant(meeting_id=m.id, user_id=ctx.user.id, role="HOST", invited_at=now))
+    s.add(MeetingParticipant(meeting_id=m.id, user_id=ctx.user.id, role="HOST", invited_at=now, rsvp="ACCEPTED", responded_at=now))
     for u in invitees:
         s.add(MeetingParticipant(meeting_id=m.id, user_id=u.id, role="ATTENDEE", invited_at=now))
     await audit(s, "meeting.create", ctx.org.id, ctx.user.id, "Meeting", m.id, invited=len(invitees),
@@ -133,7 +134,7 @@ async def get_one(code: str, ctx: Ctx = Depends(current), s: AsyncSession = Depe
     host = await s.get(User, m.host_id)
     prefs = {k: getattr(me, k) for k in ("speak", "hear", "voice", "noise")} if me else {}
     return {"meeting": meeting_view(m, me, host),
-            "participants": [{"id": str(u.id), "displayName": u.display_name, "role": p.role,
+            "participants": [{"id": str(u.id), "displayName": u.display_name, "role": p.role, "rsvp": p.rsvp,
                               "joined": p.first_joined_at is not None} for p, u in rows],
             "myPreferences": prefs}
 
@@ -157,11 +158,39 @@ async def invite(code: str, body: InviteIn, ctx: Ctx = Depends(current), s: Asyn
             s.add(MeetingParticipant(meeting_id=m.id, user_id=u.id, role="ATTENDEE", invited_at=now))
             added += 1
         elif p.removed_at is not None:
-            p.removed_at, p.invited_at = None, now
+            p.removed_at, p.invited_at, p.rsvp, p.responded_at = None, now, "PENDING", None
             added += 1
     await audit(s, "meeting.invite", ctx.org.id, ctx.user.id, "Meeting", m.id, added=added)
     await s.commit()
     return {"added": added}
+
+
+class RsvpIn(BaseModel):
+    response: str = Field(pattern="^(accept|decline)$")
+
+
+async def respond(s: AsyncSession, m: Meeting, me: MeetingParticipant | None, user: User, response: str) -> str:
+    """Accept or decline my invitation; the host is told. Commits. (Shared with the assistant's tool.)"""
+    from .reminders.service import notify_users
+    if me is None:
+        raise HTTPException(404, "You don't have an invitation to this meeting.")
+    if me.role == "HOST":
+        raise HTTPException(409, "You're the host of this meeting.")
+    if m.status in ("ENDED", "CANCELLED"):
+        raise HTTPException(409, "This meeting was cancelled." if m.status == "CANCELLED" else "This meeting is over.")
+    accepted = response == "accept"
+    me.rsvp, me.responded_at = ("ACCEPTED" if accepted else "DECLINED"), datetime.now(timezone.utc)
+    await notify_users(s, [m.host_id], f"meeting.invitation_{'accepted' if accepted else 'declined'}",
+                       f"{user.display_name} {'accepted' if accepted else 'declined'} “{m.title}”", link=f"/meetings/{m.join_code}")
+    await audit(s, f"meeting.invitation_{response}", m.organization_id, user.id, "Meeting", m.id)
+    await s.commit()
+    return me.rsvp
+
+
+@router.post("/api/meetings/{code}/rsvp")
+async def rsvp(code: str, body: RsvpIn, ctx: Ctx = Depends(current), s: AsyncSession = Depends(get_db)):
+    m, me = await load(s, ctx, code)
+    return {"rsvp": await respond(s, m, me, ctx.user, body.response)}
 
 
 class JoinIn(BaseModel):

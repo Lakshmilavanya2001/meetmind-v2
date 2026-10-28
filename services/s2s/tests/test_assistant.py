@@ -3,35 +3,11 @@ stand-in for the LLM (each reply is popped from a list, in the order the engine 
 import json
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from conftest import other, signup
 from sqlalchemy import select, text
 
 from app import db
-from app.assistant import llm
-from app.assistant.tools import load
 from app.models import Meeting, MeetingParticipant
-
-
-class Script(list):
-    pass
-
-
-@pytest.fixture
-def script(monkeypatch):
-    replies, seen = Script(), []
-
-    async def chat(http, messages, **kw):
-        seen.append({"messages": messages, **kw})
-        if not replies:
-            return {"content": "OK."}
-        r = replies.pop(0)
-        return r if isinstance(r, dict) and ("content" in r or "tool_calls" in r) else {"content": json.dumps(r)}
-    monkeypatch.setattr(llm, "chat", chat)
-    monkeypatch.setattr(llm, "configured", lambda: True)
-    load()
-    replies.seen = seen
-    return replies
 
 
 def route(*steps):

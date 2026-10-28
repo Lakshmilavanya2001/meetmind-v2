@@ -35,7 +35,7 @@ TOOL_RESULT_MAX_CHARS = 8000
 CONFIRMATION_TTL = timedelta(minutes=15)
 # Tools whose output contains other people's text (transcripts, names, titles): once one has run, the
 # conversation is no longer only the user's words (sensitive actions always ask first anyway).
-UNTRUSTED_OUTPUT_TOOLS = {"get_meeting_transcript", "summarize_meeting", "extract_action_items", "answer_meeting_question",
+UNTRUSTED_OUTPUT_TOOLS = {"get_meeting_transcript", "search_transcripts", "summarize_meeting", "extract_action_items", "answer_meeting_question",
                           "get_recent_conversation", "list_meetings", "search_users"}
 
 

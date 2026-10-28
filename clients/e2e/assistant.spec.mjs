@@ -41,6 +41,11 @@ test("meetmind-v2: assistant schedules a meeting only after Confirm", async () =
     // Ben sees the meeting on his dashboard.
     await ben.goto("/dashboard");
     await expect(ben.getByText(meetings[0].title)).toBeVisible();
+    // ...and accepts the invitation there (Asha is told).
+    await ben.getByRole("button", { name: "Accept" }).click();
+    await expect(ben.locator(".badge", { hasText: "going" })).toBeVisible();
+    const notes = await (await a.request.get("/api/notifications")).json();
+    expect(notes.items.some((n) => n.title.startsWith("Ben Das accepted"))).toBeTruthy();
   } finally {
     await browser.close();
   }

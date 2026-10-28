@@ -17,6 +17,8 @@ import httpx  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app import db  # noqa: E402
+from app.assistant import llm  # noqa: E402
+from app.assistant.tools import load  # noqa: E402
 from app.security import reset_rate_limits  # noqa: E402
 
 needs_db = pytest.mark.skipif(not URL.rsplit("/", 1)[-1].endswith("_test"), reason="TEST_DATABASE_URL must name a *_test database")
@@ -55,3 +57,26 @@ async def signup(c, name, email, org=None, join_code=None, password="correct-hor
 def jwt_claims(token: str) -> dict:
     payload = token.split(".")[1]
     return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+# The assistant's LLM, scripted: each reply is popped from the list in the order the engine asks
+# (route JSON, tool calls, text). `script.seen` holds every request.
+class Script(list):
+    pass
+
+
+@pytest.fixture
+def script(monkeypatch):
+    replies, seen = Script(), []
+
+    async def chat(http, messages, **kw):
+        seen.append({"messages": messages, **kw})
+        if not replies:
+            return {"content": "OK."}
+        r = replies.pop(0)
+        return r if isinstance(r, dict) and ("content" in r or "tool_calls" in r) else {"content": json.dumps(r)}
+    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "configured", lambda: True)
+    load()
+    replies.seen = seen
+    return replies

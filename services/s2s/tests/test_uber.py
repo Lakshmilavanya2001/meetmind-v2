@@ -128,7 +128,11 @@ async def test_connects_through_uber_sign_in_with_a_state_bound_to_the_user(clie
     assert st["configured"] is True and st["env"] == "sandbox" and st["connected"] is True
     async with _s() as s:
         row = (await s.execute(select(UberConnection).where(UberConnection.user_id == aisha.user_id))).scalar_one()
-    assert row.encrypted_tokens.startswith("v1.") and "A1" not in row.encrypted_tokens and "R1" not in row.encrypted_tokens
+    # Stored encrypted: no plaintext field names, and it decrypts to the tokens (checking for "A1" itself in
+    # random base64 ciphertext fails now and then).
+    from app.crypto import decrypt_json
+    assert row.encrypted_tokens.startswith("v1.") and "accessToken" not in row.encrypted_tokens
+    assert decrypt_json(row.encrypted_tokens) == {"accessToken": "A1", "refreshToken": "R1"}
     assert row.scopes == ["ride_request.estimate", "ride_request.ride_booking"] and row.status == "ACTIVE"
     assert (await priya_c.get("/api/integrations/uber")).json()["connected"] is False
     await priya_c.aclose()

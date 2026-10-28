@@ -90,6 +90,8 @@ class MeetingParticipant(Base):
     hear: Mapped[str | None] = mapped_column(Text)
     voice: Mapped[str | None] = mapped_column(Text)
     noise: Mapped[str | None] = mapped_column(Text)
+    rsvp: Mapped[str] = mapped_column(Text, server_default="PENDING")          # PENDING | ACCEPTED | DECLINED
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuditLog(Base):
