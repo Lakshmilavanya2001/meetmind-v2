@@ -33,6 +33,21 @@ test("meetmind-v2: call screen, panels and the assistant inside the call", async
     await expect(b.locator("#end-all")).toBeHidden();
     await a.screenshot({ path: "call-screen.png" });
 
+    // Studio noise removal: Ben switches to it in the call's settings; Asha (same language, so she hears his
+    // own voice) then plays the agent's cleaned copy of his voice and his raw microphone goes silent.
+    await b.getByRole("button", { name: "Call settings" }).click();
+    await b.locator("#noise-live").selectOption("studio");
+    await b.keyboard.press("Escape");
+    await expect.poll(async () => a.evaluate(() => {
+      const clean = document.querySelector('audio[data-clean="1"]');
+      const raw = [...document.querySelectorAll('audio[data-lk="original"]:not([data-clean])')].find((x) => x.dataset.identity === clean?.dataset.identity);
+      return clean && raw ? `clean ${clean.volume}, raw ${raw.volume}` : "waiting";
+    }), { timeout: 20_000 }).toBe("clean 1, raw 0");
+    await b.getByRole("button", { name: "Call settings" }).click();
+    await b.locator("#noise-live").selectOption("standard");            // back: his raw voice again
+    await b.keyboard.press("Escape");
+    await expect.poll(async () => a.evaluate(() => document.querySelectorAll('audio[data-clean="1"]').length), { timeout: 20_000 }).toBe(0);
+
     // Muting shows on both screens.
     await b.locator("#mute").click();
     await expect(a.locator(`.person:not(.me).muted .person-state`)).toHaveText("muted", { timeout: 10_000 });

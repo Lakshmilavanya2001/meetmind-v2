@@ -368,15 +368,24 @@ function wireRoom(room) {
     .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
       if (track.kind !== Track.Kind.Audio) return;
       const el = track.attach();
-      el.dataset.lk = isAgent(participant) ? "translation" : "original";
-      el.dataset.identity = participant.identity;
+      // A Studio speaker's voice with the noise removed (NVIDIA BNR), from the agent: played instead of
+      // their raw microphone wherever their own voice is heard.
+      const clean = isAgent(participant) && pub.trackName?.startsWith("clean-");
+      el.dataset.lk = clean ? "original" : isAgent(participant) ? "translation" : "original";
+      el.dataset.identity = clean ? pub.trackName.slice(6) : participant.identity;
+      if (clean) el.dataset.clean = "1";
+      el.dataset.sid = pub.trackSid;                     // to remove it when the track goes away
       document.body.appendChild(el);
+      if (clean) { applyVolumes(); return; }
       if (isAgent(participant)) watchLevel("translation", track.mediaStreamTrack, onTranslationLevel);
       else watchLevel(participant.identity, track.mediaStreamTrack, (v) => { setLevel(avatarOf(participant.identity), v); setSpeaking(participant.identity, v); });
       applyVolumes();
     })
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
       track.detach().forEach((el) => el.remove());
+      // The SDK may have detached it already (then detach() returns nothing): remove ours by track id.
+      document.querySelectorAll(`audio[data-sid="${CSS.escape(pub.trackSid)}"]`).forEach((el) => el.remove());
+      if (isAgent(participant) && pub.trackName?.startsWith("clean-")) { applyVolumes(); return; }   // raw voice back
       unwatchLevel(isAgent(participant) ? "translation" : participant.identity);
     })
     .on(RoomEvent.DataReceived, (payload, participant, kind, topic) => {
@@ -509,8 +518,11 @@ function applyVolumes() {
   if (!state.me) return;
   const people = humans();
   const sameLang = people.filter((p) => p.attributes.speak === state.me.hear);
+  // Whose voice arrives cleaned (Studio): their raw microphone stays silent.
+  const cleaned = new Set([...document.querySelectorAll('audio[data-clean="1"]')].map((a) => a.dataset.identity));
   document.querySelectorAll("audio[data-lk]").forEach((a) => {
     if (a.dataset.lk === "translation") a.volume = state.translationVol / 100;
+    else if (!a.dataset.clean && cleaned.has(a.dataset.identity)) a.volume = 0;
     else a.volume = (sameLang.some((p) => p.identity === a.dataset.identity) ? 100 : state.originalVol) / 100;
   });
   const allSame = sameLang.length > 0 && sameLang.length === people.length;

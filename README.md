@@ -830,12 +830,31 @@ caller received nothing about either question (Hindi and English).
 | Off | browser | raw microphone (echo cancellation stays on) |
 | Standard (default) | browser | the browser's noise suppression and gain control |
 | Enhanced | browser | RNNoise (WebAssembly AI filter, `static/noise/`) on the published mic track |
-| Studio | agent | the plain mic is sent; the agent runs it through **NVIDIA Maxine BNR** (`BNR_GRPC_URL`, gRPC, 48 kHz, `services/s2s/app/bnr.py`) before echo cancellation, speech detection and recognition |
+| Studio | agent | the plain mic is sent; the agent runs it through **NVIDIA Maxine BNR** (`BNR_GRPC_URL`, gRPC, 48 kHz, `services/s2s/app/bnr.py`) before echo cancellation, speech detection and recognition, **and publishes the cleaned voice back** (`clean-<identity>`), which the others play instead of the raw mic |
 
 Studio adds ~13 ms per 10 ms chunk plus 40 ms of model lookahead. If BNR fails, the original
 audio passes through and the stream is reopened (2-30 s later); `BNR_MAX_STREAMS` (default 8)
-caps streams per agent process. It cleans what the agent hears, not the "original voice" a
-listener can mix in. Measured with `clients/noise_test.py` (5 s of noise alone, a sentence in
+caps streams per agent process.
+
+**What listeners hear** (since 2026-10-29, as in meetmind). When someone hears a Studio speaker's own
+voice (they speak the same language, or the original is mixed under the translation), they get the
+agent's cleaned copy (`CleanVoice` in `agent.py`), and the raw microphone is silenced on their page. It
+uses the same BNR stream as recognition, so it costs no extra BNR capacity; if BNR fails, the original
+passes through. Before this, BNR cleaned only what the agent heard, so a same-language listener still
+heard a fan or traffic.
+
+Measured with `clients/clean_voice_test.py` (a real call; Asha records Ben's raw mic and his cleaned
+track; noise-only parts vs the speech part):
+
+| Noise | Noise-only level, raw → cleaned | Voice level change |
+|---|---|---|
+| fan (steady rumble + motor hum, `testdata/fan.wav`) | −32.7 → −73.4 dBFS (−40.7 dB) | −0.7 dB |
+| office | −31.7 → −79.8 dBFS (−48.1 dB) | −0.9 dB |
+| street | −30.0 → −35.0 dBFS (−5.0 dB) | −1.0 dB |
+| café (people chatting) | −30.3 → −34.1 dBFS (−3.8 dB) | −1.7 dB |
+
+BNR removes steady and machine noise almost completely. It keeps most background **speech** (café
+chatter, voices in the street), because it's built to keep human voices. Measured with `clients/noise_test.py` (5 s of noise alone, a sentence in
 noise, 5 s of noise alone; 2026-10-28): noise alone gave no utterances either way (Silero already
 ignores it). Under the sentence, Studio fixed words lost to office and street noise ("…look great"
 → "…Speeds look great") and, with people chatting in a café, kept almost the whole sentence where

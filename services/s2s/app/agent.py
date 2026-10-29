@@ -490,6 +490,54 @@ class Playback:
         self.tts: dict = {}                                       # the TTS "done" stats
 
 
+class CleanVoice:
+    """A Studio speaker's microphone with the background noise removed (NVIDIA BNR), published back into
+    the call as `clean-<identity>`: listeners who hear that person's own voice (same language, or the
+    original mixed under a translation) play it instead of the raw microphone. It carries the same BNR
+    output that feeds speech recognition (one BNR stream per caller); if BNR fails, the original audio
+    passes through, so listeners never lose the speaker. Processed in memory only, never stored."""
+
+    def __init__(self, call: "CallTranslator", identity: str):
+        self.call, self.identity = call, identity
+        self.source = rtc.AudioSource(bnr.BNR_RATE, 1, queue_size_ms=1000)
+        self.track = rtc.LocalAudioTrack.create_audio_track(f"clean-{identity}", self.source)
+        self.sid: str | None = None
+        self.frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)     # 10 ms frames, ~2 s at most
+        self.carry = b""
+        self.player: asyncio.Task | None = None
+
+    async def start(self):
+        opts = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        pub = await self.call.room.local_participant.publish_track(self.track, opts)
+        self.sid = pub.sid
+        self.player = asyncio.create_task(self._play())
+
+    def push(self, pcm48: bytes):
+        """Cleaned (or passed-through) 48 kHz audio, any length: queued as 10 ms frames, in order."""
+        data = self.carry + pcm48
+        whole = len(data) - len(data) % (bnr.BNR_CHUNK * 2)
+        for k in range(0, whole, bnr.BNR_CHUNK * 2):
+            if self.frames.full():                        # fell behind: drop the oldest, keep it live
+                self.frames.get_nowait()
+            self.frames.put_nowait(data[k:k + bnr.BNR_CHUNK * 2])
+        self.carry = data[whole:]
+
+    async def _play(self):
+        while True:
+            frame = await self.frames.get()
+            await self.source.capture_frame(rtc.AudioFrame(frame, bnr.BNR_RATE, 1, bnr.BNR_CHUNK))
+
+    async def close(self):
+        if self.player is not None:
+            self.player.cancel()
+        if self.sid:
+            try:
+                await self.call.room.local_participant.unpublish_track(self.sid)
+                log.info("cleaned voice of %s: unpublished", self.identity)
+            except Exception as e:  # noqa: BLE001 - the room may be closing
+                log.warning("cleaned voice of %s: couldn't unpublish (%s)", self.identity, e)
+
+
 class ListenerOutput:
     """What one caller hears: their own published track. Translations play in the order
     they were queued, whichever finished synthesizing first."""
@@ -750,6 +798,8 @@ class SpeakerInput:
             down = soxr.ResampleStream(bnr.BNR_RATE, IN_SR, 1, dtype="int16")
 
             def cleaned(pcm48: bytes):
+                if (cv := self.call.clean_voices.get(self.identity)) is not None:
+                    cv.push(pcm48)                        # what the others hear of this caller
                 out = down.resample_chunk(np.frombuffer(pcm48, dtype="<i2"))
                 if len(out):
                     take(out.astype("<i2").tobytes())
@@ -803,6 +853,7 @@ class CallTranslator:
         self.callers: dict[str, Caller] = {}
         self.inputs: dict[str, SpeakerInput] = {}
         self.outputs: dict[str, ListenerOutput] = {}
+        self.clean_voices: dict[str, CleanVoice] = {}   # Studio callers' cleaned voices, for the others
         self.translator = {"riva": RivaTranslateClient, "chat": ChatTranslateClient}.get(TRANSLATE_API, TranslateClient)()
         self.synth = MagpieSynthesizer(self) if TTS_API == "magpie" else Synthesizer(self)
         self.timeline = PlayoutTimeline()        # echo reference: everything played into the room
@@ -868,6 +919,15 @@ class CallTranslator:
                     self.attach_mic(ident, pub.track)
             if ident in self.inputs:
                 self.inputs[ident].start(caller.speak, caller.noise)  # restarts ASR if `speak` or `noise` changed
+            want_clean = caller.noise == "studio" and bnr.available()
+            if want_clean and ident not in self.clean_voices:
+                cv = CleanVoice(self, ident)
+                self.clean_voices[ident] = cv
+                await cv.start()
+                changed = True
+            elif not want_clean and ident in self.clean_voices:
+                await self.clean_voices.pop(ident).close()
+                changed = True
         if changed:
             self.update_permissions()
             await self.status()
@@ -886,8 +946,10 @@ class CallTranslator:
 
     def update_permissions(self):
         """Each translation track may only be subscribed to by the caller it is for."""
-        perms = [rtc.ParticipantTrackPermission(participant_identity=ident, allow_all=False,
-                                                allowed_track_sids=[out.sid])
+        # ...and a cleaned voice (Studio) by everyone in the call except its speaker.
+        perms = [rtc.ParticipantTrackPermission(
+                    participant_identity=ident, allow_all=False,
+                    allowed_track_sids=[out.sid] + [cv.sid for who, cv in self.clean_voices.items() if who != ident and cv.sid])
                  for ident, out in self.outputs.items() if out.sid]
         self.room.local_participant.set_track_subscription_permissions(
             allow_all_participants=False, participant_permissions=perms)
@@ -898,6 +960,8 @@ class CallTranslator:
             inp.stop()
         if (out := self.outputs.pop(ident, None)) is not None:
             await out.close()
+        if (cv := self.clean_voices.pop(ident, None)) is not None:
+            await cv.close()
         if (w := self.workers.pop(ident, None)) is not None:
             w.cancel()
         self.queues.pop(ident, None)
