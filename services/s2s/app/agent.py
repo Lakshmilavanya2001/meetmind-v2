@@ -30,10 +30,12 @@ from __future__ import annotations
 import asyncio
 import bisect
 import contextlib
+import itertools
 import json
 import logging
 import os
 import re
+import secrets
 import time
 import unicodedata
 from dataclasses import dataclass, field
@@ -89,9 +91,28 @@ CAPTIONS_TOPIC = "captions"
 # A conversation with Mind stays open: while Mind thinks and speaks, and this long after it finishes speaking
 # (each reply restarts it). "Thanks Mind" / "that's all", the Done button, or this much quiet ends it.
 MIND_FOLLOWUP_S = float(os.environ.get("MIND_FOLLOWUP_S", "20"))
-MIND_EXIT = re.compile(r"^\W*(?:ok(?:ay)?\s+)?(?:thanks?(?:\s+you)?|thank\s+you|bye|goodbye|that'?s\s+(?:all|it)|that\s+is\s+all|"
-                       r"stop|done|धन्यवाद|शुक्रिया|बस(?:\s+इतना\s+ही)?|ठीक\s+है\s+धन्यवाद)(?:\s*,?\s*(?:mind|माइंड))?\W*$", re.I)
-MIND_OKAY = {"en": "Okay.", "hi": "ठीक है।"}
+# Ending a conversation with Mind: a short sentence made only of stop words and fillers ("stop", "stop
+# Mind", "okay stop it", "bye Mind", "thanks Mind", "that's all", "बस", "रुको", "धन्यवाद"). A sentence
+# with anything else in it ("stop the transcript", "thanks, now book a table") is a request.
+_STOP_WORDS = {"stop", "bye", "goodbye", "thanks", "thank", "exit", "enough", "done", "quit", "close", "end", "finish",
+               "बस", "रुको", "रुकिए", "धन्यवाद", "शुक्रिया", "बाय", "बंद", "थैंक्स", "थैंक", "स्टॉप"}
+_STOP_FILLERS = {"mind", "माइंड", "please", "ok", "okay", "now", "it", "listening", "you", "hey", "a", "lot", "so", "much",
+                 "very", "for", "that's", "thats", "that", "is", "all", "the", "conversation", "assistant", "talking",
+                 "ठीक", "है", "करो", "कीजिए", "इतना", "ही", "अभी", "जी", "यू", "सुनना", "अब", "हो", "गया"}
+
+
+def is_mind_exit(text: str) -> bool:
+    words = re.findall(r"[\w'\u0900-\u097F]+", text.lower())
+    if not words or len(words) > 7:
+        return False
+    if re.search(r"\bthat'?s all\b|\bthat is all\b", text, re.I) and all(w in _STOP_WORDS | _STOP_FILLERS for w in words):
+        return True
+    return any(w in _STOP_WORDS for w in words) and all(w in _STOP_WORDS | _STOP_FILLERS for w in words)
+
+
+RUN_TAG = secrets.token_hex(2)             # this process's runs, so ids don't repeat after an agent restart
+RUN_IDS = itertools.count(1)
+MIND_OKAY = {"en": "Okay, I'll stop listening.", "hi": "ठीक है, अब मैं नहीं सुन रहा।"}
 # "Hey Mind": the assistant's voice, and how long after a bare "Hey Mind" the next utterance is the question.
 ASSISTANT_VOICE = "male" if os.environ.get("S2S_ASSISTANT_VOICE") == "male" else "female"
 WAKE_WINDOW_S = float(os.environ.get("S2S_WAKE_WINDOW_S", "8"))
@@ -506,7 +527,8 @@ class ListenerOutput:
             if pending:                                           # flush the last partial frame
                 await self._push(pb.utt, pending + b"\0" * (frame_bytes - len(pending)))
             if pb.utt.id.startswith("mind:"):                     # Mind finished speaking (or its speech failed)
-                self.call.mind_spoken(self.identity, time.time() + self.source.queued_duration, pb.utt.marks.get("mind_kind", "answer"))
+                self.call.mind_spoken(self.identity, time.time() + self.source.queued_duration,
+                                      pb.utt.marks.get("mind_kind", "answer"), pb.utt.marks.get("mind_epoch"))
             if pb.tts:
                 await self.call.utterance_audio_done(pb.utt, self.identity, pb.tts)
 
@@ -683,6 +705,11 @@ class SpeakerInput:
         return self.sent_wall[min(i, len(self.sent_wall) - 1)]
 
     async def _run(self, lang: str):
+        # Every recognition run gets its own id: a run numbers its sentences from 1, and a caller's run
+        # restarts when they change language or Studio noise removal (or the agent restarts), so without
+        # it a new sentence would reuse an old one's id (the page then updates an old caption instead of
+        # showing a new one, and the saved transcript skips the line as a duplicate).
+        run = f"{RUN_TAG}{next(RUN_IDS)}"
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=30)) as http:
             asr = AsrStream(http, lang, ASR_PARTIALS, VAD_MIN_SILENCE_MS)
             self.sent_samples, self.sent_wall = [], []
@@ -691,6 +718,7 @@ class SpeakerInput:
             try:
                 while True:
                     m = await asr.events.get()
+                    m["run"] = run
                     try:
                         await self.call.on_asr_event(self, m)
                     except Exception:  # noqa: BLE001 - keep listening after one bad event
@@ -791,6 +819,7 @@ class CallTranslator:
         self.mind_locks: dict[str, asyncio.Lock] = {}  # one answer at a time per caller, in order
         self.mind_last: dict[str, tuple[float, set[str]]] = {}   # Mind's last words to each caller (echo check)
         self.mind_open: dict[str, bool] = {}         # what the caller's page was last told
+        self.mind_epoch: dict[str, int] = {}         # +1 each time a conversation is stopped: older answers stay quiet
         self.private_utts: set[str] = set()
         self.mind_http: aiohttp.ClientSession | None = None
         self.mind_count = 0
@@ -927,7 +956,7 @@ class CallTranslator:
         if caller is None:
             return
         kind = m.get("type")
-        utt_id = f"{inp.identity}:{inp.lang}:{m.get('segment_id')}"
+        utt_id = f"{inp.identity}:{inp.lang}:{m.get('run', '0')}.{m.get('segment_id')}"
         if kind == "speech_start":
             await self.send({"type": "speech_start", "utt": utt_id, "speaker": caller.identity})
         elif kind == "partial":
@@ -968,12 +997,13 @@ class CallTranslator:
                     self.wake(caller.identity)
                     return
                 question = command if woke else text
-                if not woke and MIND_EXIT.match(question):  # "thanks Mind", "that's all": back to the call
+                if is_mind_exit(question):                  # "stop", "thanks Mind", "Hey Mind, stop": back to the call
                     self.end_mind(caller.identity, say=True)
                     return
                 self.mind_busy[caller.identity] = self.mind_busy.get(caller.identity, 0) + 1
-                await self.mind_state(caller.identity)
-                self.spawn(self.ask_mind(caller, utt_id, question))
+                # Open while Mind works on it (MIND_FOLLOWUP_S restarts once the answer has been spoken).
+                self.open_mind(caller.identity, time.time() + 120)
+                self.spawn(self.ask_mind(caller, utt_id, question, self.mind_epoch.get(caller.identity, 0)))
                 return
             self.private_utts.discard(utt_id)
             await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
@@ -1003,7 +1033,7 @@ class CallTranslator:
     # ------------------------------------------------------------------ "Hey Mind"
     def awake(self, ident: str) -> bool:
         """Is this caller in a conversation with Mind (what they say goes to Mind, not to the others)?"""
-        return self.mind_busy.get(ident, 0) > 0 or self.awake_until.get(ident, 0) > time.time()
+        return self.awake_until.get(ident, 0) > time.time()
 
     def wake(self, ident: str):
         """ "Hey Mind" on its own, or the "Ask Mind" key: a conversation with Mind starts ("Yes?")."""
@@ -1013,9 +1043,10 @@ class CallTranslator:
         self.open_mind(ident, time.time() + WAKE_WINDOW_S)          # extended once "Yes?" has been said
         self.speak_to(ident, mind.LISTENING.get(caller.speak, mind.LISTENING["en"]), caller.speak, kind="listening")
 
-    def open_mind(self, ident: str, until: float):
-        """Keep the conversation with Mind open until `until`; tell the caller's page; close it then if quiet."""
-        self.awake_until[ident] = max(self.awake_until.get(ident, 0), until)
+    def open_mind(self, ident: str, until: float, exact: bool = False):
+        """Keep the conversation with Mind open until `until` (exact: from now on, not just longer); tell the
+        caller's page; close it then if nothing else extended it."""
+        self.awake_until[ident] = until if exact else max(self.awake_until.get(ident, 0), until)
         self.spawn(self.mind_state(ident))
         self.spawn(self._close_mind_later(ident, self.awake_until[ident]))
 
@@ -1026,8 +1057,12 @@ class CallTranslator:
             await self.mind_state(ident)
 
     def end_mind(self, ident: str, say: bool = False):
-        """ "Thanks Mind" or the Done button: the caller's words go to the call again."""
+        """ "Stop" / "thanks Mind" or the Done button: the caller's words go to the call again, at once.
+        An answer still being prepared isn't spoken and doesn't reopen the conversation; only the wake word
+        (or Ask Mind) starts a new one."""
         self.awake_until.pop(ident, None)
+        self.mind_epoch[ident] = self.mind_epoch.get(ident, 0) + 1
+        self.mind_busy[ident] = 0
         caller = self.callers.get(ident)
         if say and caller:
             self.speak_to(ident, MIND_OKAY.get(caller.speak, MIND_OKAY["en"]), caller.speak, kind="bye")
@@ -1041,13 +1076,15 @@ class CallTranslator:
         self.mind_open[ident] = open_
         await self.send({"type": "mind_session", "active": open_}, to=[ident])
 
-    def mind_spoken(self, ident: str, end_at: float, kind: str):
+    def mind_spoken(self, ident: str, end_at: float, kind: str, epoch: int | None = None):
         """Mind finished speaking to a caller (at `end_at`): after an answer, the conversation stays open
-        for MIND_FOLLOWUP_S more, so a reply needs no "Hey Mind"."""
+        for MIND_FOLLOWUP_S more, so a reply needs no "Hey Mind" (unless it was stopped meanwhile)."""
+        if epoch is not None and epoch != self.mind_epoch.get(ident, 0):
+            return                                       # stopped since: stays closed
         if kind == "answer":
             self.mind_busy[ident] = max(0, self.mind_busy.get(ident, 1) - 1)
             if self.mind_busy[ident] == 0:
-                self.open_mind(ident, end_at + MIND_FOLLOWUP_S)
+                self.open_mind(ident, end_at + MIND_FOLLOWUP_S, exact=True)
         elif kind == "listening":
             self.open_mind(ident, end_at + WAKE_WINDOW_S)
 
@@ -1059,7 +1096,7 @@ class CallTranslator:
             return False
         return len(words & last[1]) / len(words) >= 0.6
 
-    def speak_to(self, ident: str, text: str, lang: str, kind: str = "answer") -> bool:
+    def speak_to(self, ident: str, text: str, lang: str, kind: str = "answer", epoch: int | None = None) -> bool:
         """Say something on one caller's own track (only they hear it), after what's queued there.
         When it has been played, mind_spoken() is told (kind: answer / listening / bye)."""
         out = self.outputs.get(ident)
@@ -1068,23 +1105,24 @@ class CallTranslator:
         self.mind_count += 1
         utt = Utterance(f"mind:{ident}:{self.mind_count}", ident, text, time.time(), time.time())
         utt.marks["mind_kind"] = kind
+        utt.marks["mind_epoch"] = self.mind_epoch.get(ident, 0) if epoch is None else epoch
         # Remembered for this caller only: Mind's voice leaking into their own mic isn't a new question.
         self.mind_last[ident] = (time.time(), self._words(text))
         self.spawn(self.synth.say(utt, text, lang, ASSISTANT_VOICE, [out.enqueue(utt)]))
         return True
 
-    async def ask_mind(self, caller: Caller, utt_id: str, question: str):
+    async def ask_mind(self, caller: Caller, utt_id: str, question: str, epoch: int = 0):
         """Answer one question (one at a time per caller, in order); mind_spoken() keeps the conversation open."""
         lock = self.mind_locks.setdefault(caller.identity, asyncio.Lock())
         async with lock:
             spoken = False
             try:
-                spoken = await self._ask_mind(caller, utt_id, question)
+                spoken = await self._ask_mind(caller, utt_id, question, epoch)
             finally:
                 if not spoken:                             # nothing played: don't leave the conversation stuck open
-                    self.mind_spoken(caller.identity, time.time(), "answer")
+                    self.mind_spoken(caller.identity, time.time(), "answer", epoch)
 
-    async def _ask_mind(self, caller: Caller, utt_id: str, question: str) -> bool:
+    async def _ask_mind(self, caller: Caller, utt_id: str, question: str, epoch: int = 0) -> bool:
         ident = caller.identity
         await self.send({"type": "assistant", "utt": utt_id, "state": "thinking", "question": question}, to=[ident])
         t0 = time.time()
@@ -1102,7 +1140,9 @@ class CallTranslator:
             log.info("assistant for %s (%d ms): %s -> %s", ident, round((time.time() - t0) * 1000), question, text)
         await self.send({"type": "assistant", "utt": utt_id, "state": "answer", "question": question, "text": text,
                          "ms": round((time.time() - t0) * 1000), "conversation": conversation}, to=[ident])
-        return self.speak_to(ident, text, caller.speak, kind="answer")
+        if epoch != self.mind_epoch.get(ident, 0):
+            return False                                   # the caller said "stop" meanwhile: shown, not spoken
+        return self.speak_to(ident, text, caller.speak, kind="answer", epoch=epoch)
 
     async def utterance_worker(self, ident: str):
         """One speaker's utterances, in order. Each one is translated into every listener

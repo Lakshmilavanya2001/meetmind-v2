@@ -24,7 +24,10 @@ def say(t):
 
 
 def later(days=2, hour=11):
+    """A slot at least `days` ahead, on a weekday (free-slot search only covers Mon-Fri working hours)."""
     d = (datetime.now(timezone.utc) + timedelta(days=days)).replace(hour=hour, minute=0, second=0, microsecond=0)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
     return d.isoformat(), (d + timedelta(minutes=30)).isoformat()
 
 

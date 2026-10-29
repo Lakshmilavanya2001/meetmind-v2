@@ -64,7 +64,7 @@ async def main():
     ok.append(bool(a1) and not l1 and p1)
     _, a2, l2, p2 = await step("2. Follow-up without 'Hey Mind'", "/td/mind-followup.wav")
     ok.append(bool(a2) and not l2 and p2)
-    _, _, l3, p3 = await step("3. 'Thanks Mind'", "/td/mind-thanks.wav", expect_answer=False, wait_after=3.0)
+    _, _, l3, p3 = await step("3. 'Okay, stop it, Mind.'", "/td/mind-stop.wav", expect_answer=False, wait_after=3.0)
     ok.append(not l3 and p3)
     states = session_states(ben, t0)
     print(f"  conversation open/closed on Ben's page: {states}")

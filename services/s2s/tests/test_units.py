@@ -120,12 +120,14 @@ def test_minds_private_answer_is_echo_only_for_its_listener():
 
 @pytest.mark.parametrize("said,ends", [
     ("Thanks Mind.", True), ("Thank you.", True), ("That's all", True), ("Okay thanks, Mind", True), ("Bye", True),
-    ("धन्यवाद", True), ("बस इतना ही", True), ("Done.", True),
+    ("Stop", True), ("Stop Mind", True), ("Okay stop it, Mind.", True), ("Mind, stop listening", True), ("Stop now please", True),
+    ("धन्यवाद", True), ("बस", True), ("माइंड रुको", True), ("Done.", True),
     ("Thanks for booking the cab, now order lunch", False), ("Stop the transcript", False), ("Yes, go ahead.", False),
+    ("No", False), ("Stop the meeting for everyone", False), ("What is the budget", False),
 ])
 def test_what_ends_a_conversation_with_mind(said, ends):
-    from app.agent import MIND_EXIT
-    assert bool(MIND_EXIT.match(said)) is ends
+    from app.agent import is_mind_exit
+    assert is_mind_exit(said) is ends
 
 
 async def test_a_conversation_with_mind_stays_open_while_it_answers_and_after():
@@ -141,15 +143,20 @@ async def test_a_conversation_with_mind_stays_open_while_it_answers_and_after():
     call.send = send
     assert not call.awake("ben")
     call.mind_busy["ben"] = 1                                   # a question is being answered
+    call.open_mind("ben", _t.time() + 120)
     assert call.awake("ben")
-    call.mind_spoken("ben", _t.time(), "answer")                # ...and has been spoken
-    assert call.awake("ben") and call.awake_until["ben"] > _t.time() + agent.MIND_FOLLOWUP_S - 1
+    call.mind_spoken("ben", _t.time(), "answer", 0)             # ...and has been spoken: 20 s from now, not 120
+    assert call.awake("ben") and abs(call.awake_until["ben"] - (_t.time() + agent.MIND_FOLLOWUP_S)) < 1
     # Replies repeat Mind's words; that alone isn't echo (only 4+ words mostly repeating Mind are).
     call.mind_last["ben"] = (_t.time(), call._words("Options: Auto, Mini, Sedan. Say yes to go ahead, or no to cancel."))
     assert not call.repeats_mind("ben", "Yes, go ahead.")
     assert not call.repeats_mind("ben", "I would prefer mini")
     assert call.repeats_mind("ben", "say yes to go ahead or no to cancel")
+    # "Stop" while another answer is still coming: closed at once, and that answer doesn't reopen it.
+    call.mind_busy["ben"] = 1
     call.end_mind("ben")
+    assert not call.awake("ben")
+    call.mind_spoken("ben", _t.time(), "answer", 0)             # the old answer (epoch 0) finishing
     assert not call.awake("ben")
     await __import__("asyncio").sleep(0.05)
     assert [m["active"] for m, to in sent if m.get("type") == "mind_session"][-1] is False

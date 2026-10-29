@@ -551,8 +551,13 @@ Other routes: `GET /api/voices`, and `POST /api/voices/preview` (a WAV sample; 3
   - Once woken ("Hey Mind", or the Ask Mind key), everything you say goes to Mind while it thinks and
     speaks, and for 20 s after it **finishes speaking** (`MIND_FOLLOWUP_S`). Each reply restarts the
     20 s, so you can keep talking without saying "Hey Mind" again.
-  - "Thanks Mind" / "that's all" / "bye", the **Done** button on the purple "Talking to Mind"
-    banner, or 20 s of quiet ends it, and your words go to the call again.
+  - A stop word ends it at once, and your words go to the call again. That's any short sentence made
+    only of stop words: "stop", "stop Mind", "okay stop it", "bye Mind", "thanks Mind", "that's all",
+    "बस", "रुको", "धन्यवाद", also straight after the wake word ("Hey Mind, stop"). The **Done** button
+    on the purple "Talking to Mind" banner, or 20 s of quiet after Mind's last answer, ends it too.
+  - Mind confirms "Okay, I'll stop listening". An answer still being prepared is shown but not
+    spoken, and doesn't reopen the conversation; only the wake word or Ask Mind starts a new one.
+  - "Stop the transcript" or "thanks, now book a table" are still requests.
   - Questions asked while Mind is still answering are queued, one at a time.
   - Your replies aren't dropped as echo just because they repeat Mind's words ("Mini", "yes, go
     ahead"). Within the conversation, a sentence counts as echo only if it both sounds like playout and
