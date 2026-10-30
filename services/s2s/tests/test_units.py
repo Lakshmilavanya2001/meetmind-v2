@@ -160,3 +160,30 @@ async def test_a_conversation_with_mind_stays_open_while_it_answers_and_after():
     assert not call.awake("ben")
     await __import__("asyncio").sleep(0.05)
     assert [m["active"] for m, to in sent if m.get("type") == "mind_session"][-1] is False
+
+
+def test_english_speech_spelled_in_devanagari_is_put_back_into_english():
+    """Parakeet, asked for English, sometimes writes the second half in Devanagari."""
+    from types import SimpleNamespace
+    from app import agent
+    text = "Ribin also you mentioned it and now we have. एडेड दैट स्टॉप वर्ड एंड सो"
+    runs = agent.indic_runs(text)
+    assert [(text[a:b], lang) for a, b, lang in runs] == [("एडेड दैट स्टॉप वर्ड एंड सो", "hi")]
+    assert agent.indic_runs("All in English, no change.") == []
+    assert [lang for _, _, lang in agent.indic_runs("one தமிழ் two")] == ["ta"]
+    q = "हे माइंड, व्हाट मीटिंग्स?"
+    assert [q[a:b] for a, b, _ in agent.indic_runs(q)] == [q]                # the end mark goes with the run
+
+    asked = []
+
+    class FakeTranslator:
+        async def to_english(self, t, src, on_delta=None):
+            asked.append((t, src))
+            return "added that stop word and so"
+
+    call = agent.CallTranslator(SimpleNamespace(name="mm-test-room"))
+    call.translator = FakeTranslator()
+    fixed = asyncio.run(call.english_only(text))
+    assert fixed == "Ribin also you mentioned it and now we have. added that stop word and so"
+    assert asked == [("एडेड दैट स्टॉप वर्ड एंड सो", "hi")]
+    assert asyncio.run(call.english_only("Hey Mind, what's next?")) == "Hey Mind, what's next?"

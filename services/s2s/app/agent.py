@@ -129,6 +129,36 @@ def route(src: str, tgt: str) -> str:
     return "pivot" if PIVOT_THROUGH_ENGLISH and "en" not in (src, tgt) else "direct"
 
 
+# The language to read each script as (Devanagari: Hindi, the one Parakeet slips into).
+SCRIPT_LANG = {s: code for code, s in reversed(list(SCRIPT.items())) if s != "LATIN"} | {"DEVANAGARI": "hi"}
+
+
+def _script(ch: str) -> str | None:
+    """The script of a letter (None for spaces, digits and punctuation)."""
+    return unicodedata.name(ch, "?").split()[0] if unicodedata.category(ch)[0] in "LM" else None
+
+
+def indic_runs(text: str) -> list[tuple[int, int, str]]:
+    """Stretches of text in a non-Latin script we know, as (start, end, language); the spaces and
+    punctuation between words of the same script belong to the stretch."""
+    runs: list[list] = []
+    for i, ch in enumerate(text):
+        s = _script(ch)
+        if s is None:
+            continue
+        lang = SCRIPT_LANG.get(s)
+        if lang is None:                                   # Latin, or a script we don't translate
+            continue
+        if runs and runs[-1][2] == lang and all(_script(c) is None for c in text[runs[-1][1]:i]):
+            runs[-1][1] = i + 1
+        else:
+            runs.append([i, i + 1, lang])
+    for r in runs:                                         # the sentence's end mark goes with it ("…?" not "…? ?")
+        while r[1] < len(text) and text[r[1]] in ".?!,।॥":
+            r[1] += 1
+    return [(a, b, lang) for a, b, lang in runs]
+
+
 @dataclass
 class Caller:
     identity: str
@@ -1015,6 +1045,26 @@ class CallTranslator:
         return len(words & played) / len(words) >= 0.6
 
     # ------------------------------------------------------------------ speech
+    async def english_only(self, text: str) -> str:
+        """Parakeet, asked for English, now and then slips into an Indian script mid-utterance on
+        accented speech and spells the English words phonetically ("एडेड दैट स्टॉप वर्ड" = "added
+        that stop word"). Put those runs back into English; the English around them stays as it is."""
+        runs = indic_runs(text)
+        if not runs:
+            return text
+        out, last = [], 0
+        for start, end, lang in runs:
+            try:
+                fixed = await self.translator.to_english(text[start:end], lang)
+            except Exception as e:                                  # keep what Parakeet gave rather than lose it
+                log.warning("couldn't put %s words back into English: %s", lang, e)
+                fixed = text[start:end]
+            out += [text[last:start], fixed, " "]
+            last = end
+        fixed = re.sub(r"\s+", " ", "".join(out) + text[last:]).strip()
+        log.info("English speech came back partly in another script; fixed: %r -> %r", text, fixed)
+        return fixed
+
     async def on_asr_event(self, inp: SpeakerInput, m: dict):
         caller = self.callers.get(inp.identity)
         if caller is None:
@@ -1038,6 +1088,8 @@ class CallTranslator:
                                  "lang": caller.speak, "text": text, "final": False})
         elif kind == "final":
             text = m["text"].strip()
+            if caller.speak == "en" and text:
+                text = await self.english_only(text)
             score = inp.echo.echo_score(inp.wall_at(m["start_ms"]), inp.wall_at(m["end_ms"])) if text else 0.0
             repeats = self.repeats_played(caller.speak, text)
             in_session = self.awake(caller.identity)
