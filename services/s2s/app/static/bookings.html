@@ -7,24 +7,25 @@
   <title>Orders & bookings · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind</a>
-  <span class="row"><a class="btn ghost small" href="/search">Search</a><a class="btn ghost small" href="/dashboard">Meetings</a></span>
-</header>
-<main class="dash">
+<body class="app">
+<nav id="app-nav" data-page="bookings"></nav>
+<main class="page">
+  <header class="page-head">
+    <div><h1>Orders &amp; bookings</h1><p class="page-sub">Food, cabs, tables and tickets booked through the assistant.</p></div>
+    <button id="refresh" class="btn ghost" type="button">Refresh</button>
+  </header>
   <section class="card" aria-labelledby="bk-h">
-    <div class="row" style="justify-content:space-between"><h2 id="bk-h">Your orders &amp; bookings</h2>
-      <button id="refresh" class="btn ghost small" type="button">Refresh</button></div>
-    <p class="hint">Food, cabs, tables and movie tickets you booked through the assistant. Sandbox bookings place no real
-      order and charge nothing. Food orders can be cancelled within 5 minutes; cabs, tables and tickets until their time.</p>
+    <div class="card-head"><h2 id="bk-h">All bookings</h2></div>
+    <p class="hint">Sandbox bookings place no real order and charge nothing. Food orders can be cancelled within
+      5 minutes; cabs, tables and tickets until their time.</p>
     <ul class="meetings" id="bookings"><li class="meta">Loading…</li></ul>
   </section>
   <p id="err" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/bookings.js"></script>
 </body>

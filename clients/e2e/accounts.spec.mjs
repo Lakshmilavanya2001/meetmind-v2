@@ -67,7 +67,7 @@ test("meetmind-v2: sign up, organisation, start and join a meeting, end for all"
     a.once("dialog", (d) => d.accept());
     await a.locator("#end-all").click();
     await expect(a).toHaveURL(/\/dashboard$/, { timeout: 15_000 });
-    await expect(a.locator("#meetings")).toContainText("ended");
+    await expect(a.locator("#meetings")).toContainText(/ended/i);
     // The transcript page: participants only; nothing was said, so nothing saved.
     await a.getByRole("link", { name: "Transcript" }).first().click();
     await expect(a).toHaveURL(new RegExp(`/meetings/${meetingCode}$`));

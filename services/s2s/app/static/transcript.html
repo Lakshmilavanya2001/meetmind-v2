@@ -7,22 +7,19 @@
   <title>Transcript · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind</a>
-  <span class="row"><a class="btn ghost small" href="/search">Search</a><a class="btn ghost small" href="/dashboard">Meetings</a></span>
-</header>
-<main class="dash">
-  <section class="card">
-    <h2 id="title">Transcript</h2>
-    <p class="meta" id="meta"></p>
-    <button id="delete" class="btn ghost small" type="button" hidden>Delete transcript</button>
-  </section>
+<body class="app">
+<nav id="app-nav" data-page="dashboard"></nav>
+<main class="page">
+
+  <header class="page-head">
+    <div><a class="back" href="/dashboard">← Meetings</a><h1 id="title">Transcript</h1><p class="page-sub meta" id="meta"></p></div>
+    <button id="delete" class="btn danger-ghost" type="button" hidden>Delete transcript</button>
+  </header>
   <section class="card" aria-labelledby="sum-h">
-    <div class="row" style="justify-content:space-between"><h2 id="sum-h">Summary</h2>
+    <div class="card-head"><h2 id="sum-h">Summary</h2>
       <button id="summarise" class="btn ghost small" type="button">Summarise now</button></div>
     <div id="summary"><p class="hint">No summary yet.</p></div>
   </section>
@@ -33,12 +30,13 @@
     <div id="answer"></div>
   </section>
   <section class="card" aria-labelledby="tr-h">
-    <div class="row" style="justify-content:space-between"><h2 id="tr-h">Transcript</h2>
-      <label class="row" style="gap:6px;font-size:14px">Show <select id="lang"><option value="">as spoken</option><option value="en">in English</option><option value="hi">in Hindi</option></select></label></div>
+    <div class="card-head"><h2 id="tr-h">Transcript</h2>
+      <label class="inline-select">Show <select id="lang"><option value="">as spoken</option><option value="en">in English</option><option value="hi">in Hindi</option></select></label></div>
     <ol class="lines" id="lines"><li class="meta">Loading…</li></ol>
   </section>
   <p id="err" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/transcript.js"></script>
 </body>

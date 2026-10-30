@@ -7,21 +7,20 @@
   <title>Assistant · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind</a>
-  <span class="row"><a class="btn ghost small" href="/dashboard">Meetings</a><a class="btn ghost small" href="/bookings">Bookings</a><a class="btn ghost small" href="/reminders">Reminders</a></span>
-</header>
-<main class="chat-wrap">
+<body class="app">
+<nav id="app-nav" data-page="assistant"></nav>
+<main class="page page-chat">
+
   <aside class="chat-list card" aria-label="Conversations">
     <button id="new-chat" class="btn primary small" type="button">New chat</button>
     <ul id="convs" class="convs"></ul>
   </aside>
   <section id="chat" class="chat card" aria-label="Chat"></section>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/assistant-chat.js"></script>
 <script src="/assistant.js"></script>

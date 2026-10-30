@@ -20,26 +20,36 @@ const when = (iso) => iso ? new Date(iso).toLocaleString([], { weekday: "short",
 
 function renderMeetings(list) {
   const ul = $("meetings");
-  if (!list.length) { ul.innerHTML = '<li class="meta">No meetings yet. Start one above.</li>'; return; }
+  if (!list.length) { ul.innerHTML = '<li class="empty-row"><strong>No meetings yet</strong><span>Start one now or schedule one, and it shows up here.</span></li>'; return; }
   const order = { LIVE: 0, SCHEDULED: 1, ENDED: 2, CANCELLED: 3 };
   list.sort((a, b) => order[a.status] - order[b.status] || (a.status === "SCHEDULED"
     ? (a.scheduledStart || "").localeCompare(b.scheduledStart || "") : (b.startedAt || b.endedAt || "").localeCompare(a.startedAt || a.endedAt || "")));
   ul.replaceChildren(...list.map((m) => {
     const li = document.createElement("li");
+    li.className = "m-row";
+    // a calendar tile: the day it's on (or was), or a live marker
+    const tile = document.createElement("div");
+    tile.className = "m-when" + (m.status === "LIVE" ? " live" : "") + (m.status === "ENDED" || m.status === "CANCELLED" ? " past" : "");
+    const at = new Date(m.status === "SCHEDULED" ? m.scheduledStart : m.startedAt || m.endedAt || m.scheduledStart || Date.now());
+    if (m.status === "LIVE") tile.innerHTML = '<span class="m-mon">Now</span><span class="m-live-dot"></span>';
+    else tile.innerHTML = `<span class="m-mon">${at.toLocaleString([], { month: "short" })}</span><span class="m-day">${at.getDate()}</span>`;
+    li.append(tile);
     const left = document.createElement("div");
+    left.className = "m-main";
     const title = document.createElement("div");
+    title.className = "m-title";
     title.textContent = m.title;
-    title.style.fontWeight = "600";
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = [m.status === "SCHEDULED" ? when(m.scheduledStart) : m.status === "LIVE" ? `started ${when(m.startedAt)}` : when(m.endedAt),
       `host ${m.host.displayName || ""}`, m.joinCode].filter(Boolean).join(" · ");
     left.append(title, meta);
     const right = document.createElement("div");
-    right.className = "row";
+    right.className = "m-actions";
     const badge = document.createElement("span");
     badge.className = "badge" + (m.status === "LIVE" ? " live" : "");
-    badge.textContent = m.status.toLowerCase();
+    badge.textContent = { LIVE: "Live", SCHEDULED: "Scheduled", ENDED: "Ended", CANCELLED: "Cancelled" }[m.status] || m.status.toLowerCase();
+    if (m.status === "SCHEDULED") badge.className = "badge info";
     right.append(badge);
     if (m.status !== "SCHEDULED" && m.status !== "CANCELLED") {
       const t = document.createElement("a");
@@ -65,7 +75,7 @@ function renderMeetings(list) {
       } else if (m.myRsvp) {
         const r = document.createElement("span");
         r.className = "badge";
-        r.textContent = m.myRsvp === "ACCEPTED" ? "going" : "declined";
+        r.textContent = m.myRsvp === "ACCEPTED" ? "Going" : "Declined";
         right.append(r);
       }
     }
@@ -96,7 +106,7 @@ function renderPeople() {
   const q = $("people-filter").value.trim().toLowerCase();
   const box = $("people");
   const list = members.filter((u) => u.id !== me.user.id && (!q || u.displayName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)));
-  if (!list.length) { box.innerHTML = '<p class="hint">No one else in your organisation yet.</p>'; return; }
+  if (!list.length) { box.innerHTML = '<p class="hint">No one else in your organisation yet. Share the join code below to invite people.</p>'; return; }
   const checked = new Set([...box.querySelectorAll("input:checked")].map((i) => i.value));
   box.replaceChildren(...list.map((u) => {
     const l = document.createElement("label");
@@ -143,9 +153,6 @@ $("schedule-form").addEventListener("submit", async (ev) => {
 });
 $("people-filter").addEventListener("input", renderPeople);
 
-$("logout").addEventListener("click", async () => {
-  try { await api("/api/auth/logout"); } finally { location.assign("/login"); }
-});
 
 if (new URLSearchParams(location.search).get("ended")) {
   $("dash-note-top").textContent = "The host ended the meeting.";
@@ -156,8 +163,8 @@ if (new URLSearchParams(location.search).get("ended")) {
 (async () => {
   try {
     me = await api("/api/me");
-    $("me-name").textContent = me.user.displayName;
-    $("org-name").textContent = `· ${me.organization.name}`;
+    const hour = new Date().getHours();
+    $("greeting").textContent = `${hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"}, ${me.user.displayName.split(" ")[0]}`;
     if (me.organization.joinCode) {
       $("admin-card").hidden = false;
       $("admin-org").textContent = me.organization.name;

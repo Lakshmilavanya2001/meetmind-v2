@@ -28,8 +28,6 @@ function fillSelect(select, options, value) {
 
 async function loadProfile() {
   const [me, langs] = await Promise.all([api("/api/me"), api("/api/languages").catch(() => ({ hear: [] }))]);
-  $("me-name").textContent = me.user.displayName;
-  $("org-name").textContent = `· ${me.organization.name}`;
   $("p-name").value = me.user.displayName;
   let zones = [];
   try { zones = Intl.supportedValuesOf("timeZone"); } catch { zones = ["Asia/Kolkata", "UTC"]; }

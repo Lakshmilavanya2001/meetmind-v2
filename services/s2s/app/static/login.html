@@ -7,17 +7,24 @@
   <title>Sign in · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<main class="join">
+<main class="join auth">
   <section class="join-intro">
-    <p class="eyebrow">MeetMind</p>
-    <h1>Meetings where everyone<br>speaks their own language.</h1>
-    <p class="lede">Live voice translation, captions and Mind, an assistant you can ask privately during a call.</p>
+    <p class="brand-lockup"><span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h7A2.5 2.5 0 0 1 16 6.5v4a2.5 2.5 0 0 1-2.5 2.5H9l-3.5 3v-3A2.5 2.5 0 0 1 4 10.5z"/><path d="M19 9.5a1.5 1.5 0 0 1 1 1.4v4.6a2.5 2.5 0 0 1-2.5 2.5H17v2.5L13.8 18H11.5"/></svg></span>MeetMind</p>
+    <h1>Meetings where everyone speaks their own language.</h1>
+    <p class="lede">Live voice translation across Indian languages, captions, and Mind, an assistant you can ask privately during a call.</p>
+    <ul class="features">
+      <li><span class="f-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg></span><span><strong>Hear everyone in your language</strong>Speech is translated and spoken in a natural voice, in about a second and a half.</span></li>
+      <li><span class="f-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/></svg></span><span><strong>An assistant in every call</strong>Say “Hey Mind” to schedule, look things up or book, without the others hearing.</span></li>
+      <li><span class="f-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg></span><span><strong>Transcripts and summaries</strong>Search what was said and decided, with the lines it came from.</span></li>
+    </ul>
   </section>
-  <section class="card join-card">
+<section class="card join-card">
+    <h2 class="auth-title">Welcome</h2>
+    <p class="hint auth-sub">Sign in, or create an account for you and your team.</p>
     <div class="tabs" role="tablist">
       <button type="button" role="tab" id="tab-login" aria-selected="true" aria-controls="login-form">Sign in</button>
       <button type="button" role="tab" id="tab-signup" aria-selected="false" aria-controls="signup-form">Create account</button>

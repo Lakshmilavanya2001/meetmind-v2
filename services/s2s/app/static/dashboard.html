@@ -7,56 +7,78 @@
   <title>Meetings · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <span class="brand">MeetMind <span class="who" id="org-name"></span></span>
-  <span class="row"><a class="btn ghost small" href="/assistant">Assistant</a><a class="btn ghost small" href="/search">Search</a><a class="btn ghost small" href="/bookings">Bookings</a><a class="btn ghost small" href="/reminders">Reminders</a><a class="btn ghost small" href="/settings">Settings</a><span class="who" id="me-name"></span><button id="logout" class="btn ghost small" type="button">Sign out</button></span>
-</header>
-<main class="dash">
-  <p id="dash-note-top" class="card" role="status" hidden style="padding:12px 18px"></p>
-  <section class="card" aria-labelledby="start-h">
-    <h2 id="start-h">Start or join</h2>
-    <div class="row">
-      <div class="field"><label for="instant-title">Title</label><input id="instant-title" maxlength="120" placeholder="Meeting"></div>
-      <button id="start-now" class="btn primary" type="button">Start a meeting now</button>
+<body class="app">
+<nav id="app-nav" data-page="dashboard"></nav>
+<main class="page">
+  <header class="page-head">
+    <div><h1 id="greeting">Meetings</h1><p class="page-sub">Live-translated calls: everyone speaks and hears their own language.</p></div>
+  </header>
+  <p id="dash-note-top" class="notice" role="status" hidden></p>
+
+  <div class="quick">
+    <section class="card action-card" aria-labelledby="start-h">
+      <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 10l4.6-2.3A1 1 0 0 1 21 8.6v6.8a1 1 0 0 1-1.4.9L15 14"/><rect x="3" y="6" width="12" height="12" rx="2"/></svg></span>
+      <div class="action-body">
+        <h2 id="start-h">New meeting</h2>
+        <p class="hint">Start a call now and share its link.</p>
+        <div class="input-row">
+          <label class="sr-only" for="instant-title">Title</label>
+          <input id="instant-title" maxlength="120" placeholder="Meeting title (optional)">
+          <button id="start-now" class="btn primary" type="button">Start a meeting now</button>
+        </div>
+      </div>
+    </section>
+    <section class="card action-card" aria-labelledby="join-h">
+      <span class="action-icon alt" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5M15 12H3"/></svg></span>
+      <div class="action-body">
+        <h2 id="join-h">Join a meeting</h2>
+        <p class="hint">Enter the code or paste the meeting link.</p>
+        <form id="join-code-form" class="input-row">
+          <label class="sr-only" for="join-code">Meeting code or link</label>
+          <input id="join-code" placeholder="abc-defg-hij" spellcheck="false">
+          <button class="btn ghost" type="submit">Join</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="dash-grid">
+    <section class="card" aria-labelledby="mine-h">
+      <div class="card-head"><h2 id="mine-h">Your meetings</h2></div>
+      <ul class="meetings" id="meetings"><li class="meta">Loading…</li></ul>
+    </section>
+
+    <div class="dash-side">
+      <section class="card" aria-labelledby="sched-h">
+        <div class="card-head"><h2 id="sched-h">Schedule a meeting</h2></div>
+        <form id="schedule-form">
+          <div class="field"><label for="s-title">Title</label><input id="s-title" required maxlength="120" placeholder="Weekly sync"></div>
+          <div class="field-grid">
+            <div class="field"><label for="s-start">Starts</label><input id="s-start" type="datetime-local" required></div>
+            <div class="field"><label for="s-duration">Length</label>
+              <select id="s-duration"><option value="15">15 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="90">1.5 hours</option></select></div>
+          </div>
+          <div class="field"><label for="people-filter">Invite people</label>
+            <input id="people-filter" placeholder="Filter by name or email">
+            <div class="people-pick" id="people" aria-label="People"></div>
+          </div>
+          <button class="btn primary wide" type="submit">Schedule</button>
+        </form>
+      </section>
+
+      <section class="card" id="admin-card" hidden aria-labelledby="admin-h">
+        <div class="card-head"><h2 id="admin-h">Invite your team</h2></div>
+        <p class="hint">People sign up into <strong id="admin-org"></strong> with this join code:</p>
+        <p class="join-code"><span class="code" id="admin-code"></span></p>
+      </section>
     </div>
-    <form id="join-code-form" class="row" style="margin-top:14px">
-      <div class="field"><label for="join-code">Meeting code or link</label><input id="join-code" placeholder="abc-defg-hij" spellcheck="false"></div>
-      <button class="btn ghost" type="submit">Join</button>
-    </form>
-  </section>
-
-  <section class="card" aria-labelledby="sched-h">
-    <h2 id="sched-h">Schedule a meeting</h2>
-    <form id="schedule-form">
-      <div class="row">
-        <div class="field"><label for="s-title">Title</label><input id="s-title" required maxlength="120"></div>
-        <div class="field"><label for="s-start">Starts</label><input id="s-start" type="datetime-local" required></div>
-        <div class="field"><label for="s-duration">Length</label>
-          <select id="s-duration"><option value="15">15 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">1 hour</option><option value="90">1.5 hours</option></select></div>
-      </div>
-      <div class="field" style="margin-top:12px"><label for="people-filter">Invite people from your organisation</label>
-        <input id="people-filter" placeholder="Filter by name or email">
-        <div class="people-pick" id="people" aria-label="People"></div>
-      </div>
-      <button class="btn primary" type="submit">Schedule</button>
-    </form>
-  </section>
-
-  <section class="card" aria-labelledby="mine-h">
-    <h2 id="mine-h">Your meetings</h2>
-    <ul class="meetings" id="meetings"><li class="meta">Loading…</li></ul>
-  </section>
-
-  <section class="card" id="admin-card" hidden aria-labelledby="admin-h">
-    <h2 id="admin-h">Your organisation</h2>
-    <p>People sign up into <strong id="admin-org"></strong> with this join code: <span class="code" id="admin-code"></span></p>
-  </section>
+  </div>
   <p id="dash-error" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/dashboard.js"></script>
 </body>
 </html>

@@ -7,19 +7,20 @@
   <title>Reminders · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind</a>
-  <a class="btn ghost small" href="/dashboard">Meetings</a>
-</header>
-<main class="dash">
+<body class="app">
+<nav id="app-nav" data-page="reminders"></nav>
+<main class="page">
+  <header class="page-head">
+    <div><h1>Reminders</h1><p class="page-sub">Reminders you or the assistant set, and the notifications they send.</p></div>
+  </header>
   <section class="card" aria-labelledby="rem-h">
-    <h2 id="rem-h">Upcoming reminders</h2>
+    <div class="card-head"><h2 id="rem-h">Upcoming reminders</h2></div>
     <ul class="meetings" id="reminders"><li class="meta">Loading…</li></ul>
-    <form id="add-form" style="margin-top:14px">
+    <form id="add-form" class="subform">
+      <h3>New reminder</h3>
       <div class="row">
         <div class="field"><label for="r-text">Remind me to</label><input id="r-text" required maxlength="300" placeholder="Send the site report"></div>
         <div class="field"><label for="r-when">When</label><input id="r-when" type="datetime-local" required></div>
@@ -30,7 +31,7 @@
   </section>
 
   <section class="card" aria-labelledby="notif-h">
-    <div class="row" style="justify-content:space-between"><h2 id="notif-h">Notifications <span class="badge" id="unread" hidden></span></h2>
+    <div class="card-head"><h2 id="notif-h">Notifications <span class="badge" id="unread" hidden></span></h2>
       <button class="btn ghost small" type="button" id="read-all">Mark all read</button></div>
     <ul class="meetings" id="notifications"><li class="meta">Loading…</li></ul>
   </section>
@@ -59,6 +60,7 @@
   </section>
   <p id="err" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/reminders.js"></script>
 </body>

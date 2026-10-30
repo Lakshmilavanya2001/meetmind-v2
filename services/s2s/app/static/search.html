@@ -7,15 +7,15 @@
   <title>Search · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind</a>
-  <a class="btn ghost small" href="/dashboard">Meetings</a>
-</header>
-<main class="dash">
+<body class="app">
+<nav id="app-nav" data-page="search"></nav>
+<main class="page">
+  <header class="page-head">
+    <div><h1>Search</h1><p class="page-sub">Ask a question across the saved transcripts of your meetings.</p></div>
+  </header>
   <section class="card">
     <h2>Ask about your meetings</h2>
     <p class="hint">Answers come only from the saved transcripts of meetings you took part in, with the lines they're based on.</p>
@@ -25,6 +25,7 @@
   </section>
   <p id="err" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/search.js"></script>
 </body>

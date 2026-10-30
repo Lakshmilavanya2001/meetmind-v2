@@ -7,16 +7,16 @@
   <title>Settings · MeetMind</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="app-top">
-  <a class="brand" href="/dashboard">MeetMind <span class="who" id="org-name"></span></a>
-  <span class="row"><a class="btn ghost small" href="/dashboard">Meetings</a><span class="who" id="me-name"></span></span>
-</header>
-<main class="dash">
-  <p id="note" class="card" role="status" hidden style="padding:12px 18px"></p>
+<body class="app">
+<nav id="app-nav" data-page="settings"></nav>
+<main class="page">
+  <header class="page-head">
+    <div><h1>Settings</h1><p class="page-sub">Your profile, language and connected accounts.</p></div>
+  </header>
+  <p id="note" class="notice" role="status" hidden></p>
 
   <section class="card" aria-labelledby="profile-h">
     <h2 id="profile-h">Profile</h2>
@@ -32,7 +32,7 @@
   </section>
 
   <section class="card" aria-labelledby="uber-h">
-    <h2 id="uber-h" class="row" style="align-items:center">Uber <span id="uber-badge" class="badge" hidden></span></h2>
+    <div class="card-head"><h2 id="uber-h">Uber <span id="uber-badge" class="badge" hidden></span></h2></div>
     <p class="hint" id="uber-about">Connect your Uber account and the assistant shows Uber's real options and fares, and books rides after you confirm.</p>
     <div id="uber-state" class="row" style="justify-content:space-between;align-items:center;margin-top:12px"><span class="meta">Loading…</span></div>
   </section>
@@ -43,6 +43,7 @@
   </section>
   <p id="err" class="error" role="alert" hidden></p>
 </main>
+<script src="/shell.js"></script>
 <script src="/common.js"></script>
 <script src="/settings.js"></script>
 </body>
