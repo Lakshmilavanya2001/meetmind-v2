@@ -732,8 +732,34 @@ Transcripts, translations and per-utterance latency go to every caller on the
 messages, see `agent.py`.
 
 Live captions of the speaker's own words while they talk (`S2S_ASR_PARTIALS=1`, on):
-the utterance so far is re-transcribed every half second (~50 ms per request on Parakeet,
-~25 ms on IndicConformer).
+the utterance so far is re-transcribed every half second (~50 ms per request on Parakeet then,
+~25 ms on IndicConformer). None is started once the speaker has gone quiet, so the recogniser
+is free for the early transcript.
+
+**Early transcript and translation** (`S2S_EARLY=1`, on). About 0.2 s into a pause (the 200 ms
+trailing pad), the sentence so far is transcribed while the voice detector waits out the rest of
+the 0.5 s pause, and translation into every listener language starts from it. If the pause is the
+end of the sentence, the final transcript *is* that transcription (the audio is the same, so it
+isn't sent twice) and the translations already under way become the utterance's; nothing of them
+is shown or spoken before then. If the speaker carries on, they are cancelled. The assistant's
+words ("Hey Mind…") are never translated early.
+
+**Speech phrase by phrase** (`S2S_TTS_PHRASES=1`, on; streaming translators only, not Riva). Each
+phrase of a translation is sent to TTS as soon as the translator has written it: a sentence end, or
+a comma, semicolon or colon after `S2S_PHRASE_MIN_WORDS` words (default 2). Phrases play in order
+on each listener's track; a break at a comma left a 0.15-0.27 s pause in the speech.
+
+Measured on 2026-11-02 (`clients/call_test_en_hi.py` clips, Qwen, four runs each), from the moment
+the speaker stops to the first translated audio at the other caller:
+
+| | before | after |
+|---|---|---|
+| Hindi → English (6.5 s clip) | 1.78-1.82 s | 1.22-1.31 s |
+| English → Hindi (~5 s) | 1.90-1.93 s | 1.05-1.09 s |
+
+Parakeet now takes ~0.27 s for one second of audio and ~0.49 s for 6.5 s, one request at a time
+(two at once: the second waits for the first). It was ~0.05 s when the tables below were measured;
+it is the largest single step left, after Qwen (~0.5-0.7 s for a sentence).
 
 **Measured now** (shared models) with two simulated callers in real time
 (`clients/call_test_en_hi.py`, three runs on 2026-10-27). Times are from the moment the

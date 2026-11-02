@@ -71,6 +71,12 @@ MAGPIE_TTS_URL = os.environ.get("MAGPIE_TTS_URL", "http://127.0.0.1:9000/v1").rs
 MAGPIE_LOCALE = {"en": "en-US", "hi": "hi-IN"}            # the call languages Magpie voices
 ASR_PARTIALS = os.environ.get("S2S_ASR_PARTIALS", "1") == "1"
 VAD_MIN_SILENCE_MS = int(os.environ.get("S2S_VAD_MIN_SILENCE_MS", "500"))
+# Speak a translation phrase by phrase as the translator streams it, instead of waiting for all of it
+# (only for streaming translators; Riva returns a translation whole). A phrase ends at a sentence end, or
+# at a comma, semicolon or colon once it has PHRASE_MIN_WORDS words. Measured: a break at "हैलो प्रिया," left a
+# 0.15 s pause in the speech (a comma's), and English -> Hindi was heard ~0.5 s sooner.
+TTS_PHRASES = os.environ.get("S2S_TTS_PHRASES", "1") == "1"
+PHRASE_MIN_WORDS = int(os.environ.get("S2S_PHRASE_MIN_WORDS", "2"))
 # Echo protection. A browser cancels echo from its own speaker only. Two devices in one
 # room, or a speaker loud enough to beat the browser, feed translated speech back into a
 # microphone, where it is transcribed and translated again, back and forth. The worker
@@ -190,6 +196,68 @@ class Utterance:
     speech_end: float              # wall clock when the speaker stopped (from stream time)
     final_at: float                # wall clock when the final transcript arrived
     marks: dict = field(default_factory=dict)
+    spec: "Speculation | None" = None   # translations started from the early transcript
+
+
+class TextStream:
+    """A translation as it streams in (the text so far)."""
+
+    def __init__(self):
+        self.text = ""
+        self.changed = asyncio.Event()
+
+    def update(self, text: str):
+        self.text = text
+        self.changed.set()
+
+
+@dataclass
+class Job:
+    """One translation into one language: its text as it streams, and the finished (text, stats)."""
+    stream: TextStream
+    future: asyncio.Future
+
+
+class Speculation:
+    """Translations started from a sentence's early transcript (~0.2 s into the speaker's pause), while
+    the pause is still being confirmed as the end of the sentence. If the final transcript is the same,
+    the utterance takes them over; otherwise they are cancelled. Nothing of them reaches anyone before."""
+
+    def __init__(self, raw: str):
+        self.raw = raw                                  # the early transcript, as recognised
+        self.fixed: asyncio.Future | None = None        # -> the text to translate (English slips repaired)
+        self.jobs: dict[str, Job] = {}                  # listener language -> translation
+        self.utt: Utterance | None = None               # set once the final transcript confirms it
+        self.at = time.time()
+
+    def cancel(self):
+        for f in [self.fixed, *(j.future for j in self.jobs.values())]:
+            if f is not None and not f.done():
+                f.cancel()
+
+
+def _quiet(fut: asyncio.Future) -> asyncio.Future:
+    """Don't log "exception was never retrieved" for a translation nobody ended up needing."""
+    fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+    return fut
+
+
+_PHRASE_END, _PHRASE_PAUSE = ".?!।॥", ",;:"
+
+
+def next_phrase(text: str, start: int, min_words: int = PHRASE_MIN_WORDS) -> int | None:
+    """Where the first finished phrase of text[start:] ends (just past its mark), or None yet. A phrase
+    ends at a sentence end (two words at least, so "Dr." isn't one) or at a comma, semicolon or colon once
+    it has min_words words; the mark must be followed by a space, so "3.5" and a reply still being written
+    don't count."""
+    for i in range(start, len(text) - 1):
+        ch = text[i]
+        if not text[i + 1].isspace() or ch not in _PHRASE_END + _PHRASE_PAUSE:
+            continue
+        words = len(text[start:i].split())
+        if words >= (2 if ch in _PHRASE_END else min_words):
+            return i + 1
+    return None
 
 
 # ---------------------------------------------------------------------------- translate
@@ -902,6 +970,7 @@ class CallTranslator:
         self.mind_open: dict[str, bool] = {}         # what the caller's page was last told
         self.mind_epoch: dict[str, int] = {}         # +1 each time a conversation is stopped: older answers stay quiet
         self.private_utts: set[str] = set()
+        self.specs: dict[str, Speculation] = {}      # utterance id -> translations started from its early transcript
         self.mind_http: aiohttp.ClientSession | None = None
         self.mind_count = 0
         self.voice = VoiceAssistant(room.name)      # "Hey Mind" through the assistant's agents
@@ -1086,58 +1155,102 @@ class CallTranslator:
             else:
                 await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
                                  "lang": caller.speak, "text": text, "final": False})
+        elif kind == "early":
+            self.speculate(caller, utt_id, m["text"].strip())
         elif kind == "final":
-            text = m["text"].strip()
-            if caller.speak == "en" and text:
-                text = await self.english_only(text)
-            score = inp.echo.echo_score(inp.wall_at(m["start_ms"]), inp.wall_at(m["end_ms"])) if text else 0.0
-            repeats = self.repeats_played(caller.speak, text)
-            in_session = self.awake(caller.identity)
-            if in_session:
-                # Talking with Mind: replies naturally repeat Mind's words ("Mini", "yes, go ahead"), so only
-                # audio that both sounds like playout and repeats most of what was just played is echo.
-                repeats = repeats or self.repeats_mind(caller.identity, text)
-                echo = bool(ECHO_CANCEL and score >= ECHO_SCORE_MAX and repeats)
-            else:
-                echo = bool(ECHO_CANCEL and (score >= ECHO_SCORE_MAX or (score >= ECHO_SCORE_WITH_TEXT and repeats)))
-            if LOG_TEXT and text:
-                log.info("heard %s (%s, echo score %.2f%s%s): %s", utt_id, caller.speak, score,
-                         ", repeats played words" if repeats else "",
-                         ", dropped as echo" if echo else "", text)
-            woke, command = strip_wake_phrase(text) if text and not echo else (False, text)
-            if text and not echo and (woke or in_session):
-                self.private_utts.discard(utt_id)
-                await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity, "lang": caller.speak,
-                                 "text": text, "final": True, "echo": False, "assistant": True}, to=[caller.identity])
-                if woke and not command:                     # "Hey Mind" … (pause) … the question
-                    self.wake(caller.identity)
-                    return
-                question = command if woke else text
-                if is_mind_exit(question):                  # "stop", "thanks Mind", "Hey Mind, stop": back to the call
-                    self.end_mind(caller.identity, say=True)
-                    return
-                self.mind_busy[caller.identity] = self.mind_busy.get(caller.identity, 0) + 1
-                # Open while Mind works on it (MIND_FOLLOWUP_S restarts once the answer has been spoken).
-                self.open_mind(caller.identity, time.time() + 120)
-                self.spawn(self.ask_mind(caller, utt_id, question, self.mind_epoch.get(caller.identity, 0)))
-                return
-            self.private_utts.discard(utt_id)
-            await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
-                             "lang": caller.speak, "text": text, "final": True, "echo": echo})
-            if not text or echo:
-                return
-            self.memory.add(caller.name, caller.speak, text)
-            started = inp.wall_at(m["start_ms"])
-            self.saved_lines[utt_id] = self.spawn(self.transcript.line(
-                utt_id, caller.identity, caller.name, caller.speak, text, started, inp.wall_at(m["end_ms"])))
-            if len(self.saved_lines) > 500:
-                self.saved_lines.pop(next(iter(self.saved_lines)))
-            end_ms = m["end_ms"] - (0 if m.get("forced") else SPEECH_PAD_MS)
-            utt = Utterance(utt_id, caller.identity, text, inp.wall_at(end_ms), time.time())
-            utt.marks["asr_decode_ms"] = m.get("decode_ms")
-            await self.queues[caller.identity].put(utt)
+            spec = self.specs.pop(utt_id, None)
+            try:
+                await self._on_final(inp, caller, m, utt_id, spec)
+            finally:
+                if spec is not None and spec.utt is None:      # not taken over: nobody needs it
+                    spec.cancel()
         elif kind == "error":
             log.warning("asr error for %s: %s", inp.identity, m.get("message"))
+
+    def speculate(self, caller: Caller, utt_id: str, text: str):
+        """The early transcript: start translating it now (not for the assistant's words)."""
+        old = self.specs.pop(utt_id, None)
+        if old is not None:                                 # an earlier pause of the same sentence
+            old.cancel()
+        if (not text or utt_id in self.private_utts or self.awake(caller.identity)
+                or strip_wake_phrase(text)[0] or may_become_wake(text)):
+            return
+        langs = [lang for lang in self.listener_langs(caller) if route(caller.speak, lang) == "direct"]
+        if not langs:
+            return
+        spec = Speculation(text)
+
+        async def same():
+            return text
+        spec.fixed = _quiet(asyncio.ensure_future(self.english_only(text) if caller.speak == "en" else same()))
+        for lang in langs:
+            async def caption(t, lang=lang):
+                if spec.utt is not None:
+                    await self.translation_delta(spec.utt, caller.identity, lang, t)
+            spec.jobs[lang] = self.translation_job(spec.fixed, caller.speak, lang, None, caption)
+        self.specs[utt_id] = spec
+        for k in [k for k, s in self.specs.items() if time.time() - s.at > 60]:
+            self.specs.pop(k).cancel()
+
+    async def _on_final(self, inp: SpeakerInput, caller: Caller, m: dict, utt_id: str, spec: Speculation | None):
+        text = m["text"].strip()
+        if spec is not None and spec.raw != text:       # the speaker went on, or it was heard differently
+            spec.cancel()
+            spec = None
+        if caller.speak == "en" and text:
+            text = await spec.fixed if spec is not None else await self.english_only(text)
+        score = inp.echo.echo_score(inp.wall_at(m["start_ms"]), inp.wall_at(m["end_ms"])) if text else 0.0
+        repeats = self.repeats_played(caller.speak, text)
+        in_session = self.awake(caller.identity)
+        if in_session:
+            # Talking with Mind: replies naturally repeat Mind's words ("Mini", "yes, go ahead"), so only
+            # audio that both sounds like playout and repeats most of what was just played is echo.
+            repeats = repeats or self.repeats_mind(caller.identity, text)
+            echo = bool(ECHO_CANCEL and score >= ECHO_SCORE_MAX and repeats)
+        else:
+            echo = bool(ECHO_CANCEL and (score >= ECHO_SCORE_MAX or (score >= ECHO_SCORE_WITH_TEXT and repeats)))
+        if LOG_TEXT and text:
+            log.info("heard %s (%s, echo score %.2f%s%s): %s", utt_id, caller.speak, score,
+                     ", repeats played words" if repeats else "",
+                     ", dropped as echo" if echo else "", text)
+        woke, command = strip_wake_phrase(text) if text and not echo else (False, text)
+        if text and not echo and (woke or in_session):
+            self.private_utts.discard(utt_id)
+            await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity, "lang": caller.speak,
+                             "text": text, "final": True, "echo": False, "assistant": True}, to=[caller.identity])
+            if woke and not command:                     # "Hey Mind" … (pause) … the question
+                self.wake(caller.identity)
+                return
+            question = command if woke else text
+            if is_mind_exit(question):                  # "stop", "thanks Mind", "Hey Mind, stop": back to the call
+                self.end_mind(caller.identity, say=True)
+                return
+            self.mind_busy[caller.identity] = self.mind_busy.get(caller.identity, 0) + 1
+            # Open while Mind works on it (MIND_FOLLOWUP_S restarts once the answer has been spoken).
+            self.open_mind(caller.identity, time.time() + 120)
+            self.spawn(self.ask_mind(caller, utt_id, question, self.mind_epoch.get(caller.identity, 0)))
+            return
+        self.private_utts.discard(utt_id)
+        await self.send({"type": "transcript", "utt": utt_id, "speaker": caller.identity,
+                         "lang": caller.speak, "text": text, "final": True, "echo": echo})
+        if not text or echo:
+            return
+        self.memory.add(caller.name, caller.speak, text)
+        started = inp.wall_at(m["start_ms"])
+        self.saved_lines[utt_id] = self.spawn(self.transcript.line(
+            utt_id, caller.identity, caller.name, caller.speak, text, started, inp.wall_at(m["end_ms"])))
+        if len(self.saved_lines) > 500:
+            self.saved_lines.pop(next(iter(self.saved_lines)))
+        end_ms = m["end_ms"] - (0 if m.get("forced") else SPEECH_PAD_MS)
+        utt = Utterance(utt_id, caller.identity, text, inp.wall_at(end_ms), time.time())
+        utt.marks["asr_decode_ms"] = m.get("decode_ms")
+        if spec is not None:                            # its translations are this utterance's now
+            utt.spec, spec.utt = spec, utt
+            utt.marks["early"] = True
+            for lang, job in spec.jobs.items():
+                if job.stream.text:
+                    await self.translation_delta(utt, caller.identity, lang, job.stream.text)
+        await self.queues[caller.identity].put(utt)
 
     async def save_translation(self, utt_id: str, lang: str, text: str):
         line = self.saved_lines.get(utt_id)
@@ -1270,16 +1383,68 @@ class CallTranslator:
             speaker = self.callers.get(ident)
             if speaker is None:
                 continue
-            by_lang: dict[str, list[Caller]] = {}
-            for c in self.callers.values():
-                if c.identity != ident and c.hear != speaker.speak:
-                    by_lang.setdefault(c.hear, []).append(c)
+            by_lang = self.listener_langs(speaker)
             english = None              # shared English step, when some language needs it
             if any(route(speaker.speak, lang) == "pivot" for lang in by_lang):
                 en_delta = (lambda t: self.translation_delta(utt, ident, "en", t)) if "en" in by_lang else None
                 english = asyncio.ensure_future(self.translator.to_english(utt.text, speaker.speak, en_delta))
             await asyncio.gather(*(self.deliver(utt, speaker, lang, group, english)
                                    for lang, group in by_lang.items()))
+            if utt.spec is not None:
+                utt.spec.cancel()                           # languages nobody hears any more
+
+    def listener_langs(self, speaker: Caller) -> dict[str, list[Caller]]:
+        """The languages this speaker is translated into, each with its listeners."""
+        by_lang: dict[str, list[Caller]] = {}
+        for c in self.callers.values():
+            if c.identity != speaker.identity and c.hear != speaker.speak:
+                by_lang.setdefault(c.hear, []).append(c)
+        return by_lang
+
+    def translation_job(self, text, src: str, lang: str, english: asyncio.Future | None, caption) -> Job:
+        """Start translating `text` (a string, or a future of one) into `lang`; `caption` gets the text so far."""
+        stream = TextStream()
+
+        async def on_delta(t):
+            stream.update(t)
+            await caption(t)
+
+        async def run():
+            src_text = await text if isinstance(text, asyncio.Future) else text
+            return await self.translator.translate(src_text, src, lang, on_delta, english)
+        return Job(stream, _quiet(asyncio.ensure_future(run())))
+
+    def speakable(self, piece: str, lang: str) -> str:
+        """A piece of a streamed translation as the translator would finish it (see TranslateClient)."""
+        piece = re.sub(r"\s+([.,?!।])", r"\1", piece).strip().strip('"“” ')
+        if piece and TranslateClient.foreign_letters(piece, lang):
+            piece = TranslateClient.respell(piece, lang)
+        return piece
+
+    async def speak_phrases(self, utt: Utterance, job: Job, lang: str, voice: str, group: list[Caller]):
+        """Speak a translation while it streams in: each finished phrase goes to TTS at once (its own
+        synthesis, queued in order for every listener of the language), the rest once it's complete."""
+        pos = 0
+
+        def say(piece: str):
+            if not piece:
+                return
+            playbacks = [self.outputs[c.identity].enqueue(utt) for c in group if c.identity in self.outputs]
+            if playbacks:
+                self.spawn(self.synth.say(utt, piece, lang, voice, playbacks))
+
+        while not job.future.done():
+            job.stream.changed.clear()
+            while (end := next_phrase(job.stream.text, pos)) is not None:
+                say(self.speakable(job.stream.text[pos:end], lang))
+                pos = end
+            waiter = asyncio.ensure_future(job.stream.changed.wait())
+            await asyncio.wait({waiter, job.future}, return_when=asyncio.FIRST_COMPLETED)
+            waiter.cancel()
+        if job.future.cancelled() or job.future.exception() is not None:
+            return
+        text = job.future.result()[0]
+        say(self.speakable(job.stream.text[pos:], lang) if pos else text)
 
     async def translation_delta(self, utt: Utterance, ident: str, lang: str, text: str):
         if "translate_first" not in utt.marks:
@@ -1291,10 +1456,16 @@ class CallTranslator:
                       english: asyncio.Future | None):
         """Translate one utterance into one language and queue it for that language's listeners."""
         ident = speaker.identity
+        speaking = None
         try:
             t0 = time.time()
-            text, stats = await self.translator.translate(
-                utt.text, speaker.speak, lang, lambda t: self.translation_delta(utt, ident, lang, t), english)
+            job = utt.spec.jobs.get(lang) if utt.spec is not None else None
+            if job is None:
+                job = self.translation_job(utt.text, speaker.speak, lang, english,
+                                           lambda t: self.translation_delta(utt, ident, lang, t))
+            if TTS_PHRASES and TRANSLATE_API != "riva":
+                speaking = asyncio.ensure_future(self.speak_phrases(utt, job, lang, speaker.voice, group))
+            text, stats = await job.future
             utt.marks[f"translated:{lang}"] = time.time()
             if LOG_TEXT:
                 log.info("translated %s -> %s: %s", utt.id, lang, text)
@@ -1304,20 +1475,34 @@ class CallTranslator:
             if text:
                 self.spawn(self.save_translation(utt.id, lang, text))
                 self.remember_played(lang, text)
-                playbacks = [self.outputs[c.identity].enqueue(utt) for c in group if c.identity in self.outputs]
-                if playbacks:                                     # one synthesis for the whole group
-                    self.spawn(self.synth.say(utt, text, lang, speaker.voice, playbacks))
+                if speaking is not None:
+                    await speaking                                # every phrase queued before the next utterance
+                else:
+                    playbacks = [self.outputs[c.identity].enqueue(utt) for c in group if c.identity in self.outputs]
+                    if playbacks:                                 # one synthesis for the whole group
+                        self.spawn(self.synth.say(utt, text, lang, speaker.voice, playbacks))
         except Exception as e:  # noqa: BLE001
             log.exception("translation of %s into %s failed", utt.id, lang)
             await self.status(f"translation failed: {e}")
+        finally:
+            if speaking is not None and not speaking.done():
+                speaking.cancel()
 
     async def utterance_audio_done(self, utt: Utterance, listener: str, tts: dict):
         """Per-utterance latency, measured from the moment the speaker stopped talking."""
-        if utt.id.startswith("mind:"):                    # the assistant's own speech isn't a translation
-            return
-        first_audio = utt.marks.get(f"audio:{listener}")
+        if utt.id.startswith("mind:") or f"reported:{listener}" in utt.marks:
+            return                                        # the assistant's speech; or a later phrase
+        utt.marks[f"reported:{listener}"] = True
+        self.spawn(self._report(utt, listener, tts))
+
+    async def _report(self, utt: Utterance, listener: str, tts: dict):
         caller = self.callers.get(listener)
         lang = caller.hear if caller else None
+        for _ in range(300):                              # spoken phrase by phrase: the first phrase can finish
+            if f"translated:{lang}" in utt.marks:         # playing before the translation does
+                break
+            await asyncio.sleep(0.1)
+        first_audio = utt.marks.get(f"audio:{listener}")
         ms = lambda t: round((t - utt.speech_end) * 1000) if t else None  # noqa: E731
         metrics = {
             "type": "metrics", "utt": utt.id, "speaker": utt.speaker, "listener": listener,
@@ -1327,7 +1512,7 @@ class CallTranslator:
             "translation_done_ms": ms(utt.marks.get(f"translated:{lang}")),
             "audio_start_ms": ms(first_audio),                       # translated speech starts playing
             "audio_s": round(tts.get("audio_ms", 0) / 1000, 2), "tts_ttfa_ms": tts.get("ttfa_ms"),
-            "vad_pause_ms": VAD_MIN_SILENCE_MS,
+            "vad_pause_ms": VAD_MIN_SILENCE_MS, "early": bool(utt.marks.get("early")),
         }
         log.info("utterance %s -> %s: %s", utt.id, listener, json.dumps(metrics))
         await self.send(metrics)

@@ -249,6 +249,11 @@ services:
       S2S_ASR_PARTIALS: ${S2S_ASR_PARTIALS:-1}
       S2S_ASR_PARTIAL_INTERVAL_S: "0.5"
       S2S_VAD_MIN_SILENCE_MS: "500"     # pause that ends an utterance
+      # Lower latency (README): translate from the transcript taken ~0.2 s into a pause, and speak a
+      # translation phrase by phrase as it streams in (a comma ends a phrase after this many words).
+      S2S_EARLY: ${S2S_EARLY:-1}
+      S2S_TTS_PHRASES: ${S2S_TTS_PHRASES:-1}
+      S2S_PHRASE_MIN_WORDS: ${S2S_PHRASE_MIN_WORDS:-2}
       S2S_ECHO_CANCEL: ${S2S_ECHO_CANCEL:-1}  # cancel the room's translated audio out of every mic
       S2S_LOG_TEXT: ${S2S_LOG_TEXT:-1}        # log transcripts and translations (debugging)
       # "Studio" noise removal: NVIDIA Maxine BNR (gRPC host:port) on a caller's mic before speech

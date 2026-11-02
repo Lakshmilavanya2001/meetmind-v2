@@ -51,14 +51,18 @@ class SegmenterConfig:
     speech_pad_ms: int = 200         # audio kept before speech start / after speech end
     min_speech_ms: int = 200         # shorter blips are dropped ("haan" is ~250 ms)
     max_segment_s: float = 15.0      # force a cut so a monologue still produces finals
+    # "pause": once a pause has lasted the trailing pad (speech_pad_ms), the utterance so far is
+    # handed out early, while the segmenter waits out the rest of min_silence_ms. If the pause
+    # turns into the end, the "end" audio is exactly this audio (same frames, same trim).
+    early: bool = False
 
 
 @dataclass
 class Event:
-    kind: str                        # "start" | "end"
+    kind: str                        # "start" | "pause" | "end"
     start_ms: int
     end_ms: int = 0
-    audio: np.ndarray | None = None  # set on "end"
+    audio: np.ndarray | None = None  # set on "pause" and "end"
     forced: bool = False
 
 
@@ -81,6 +85,7 @@ class Segmenter:
         self.silence_ms = 0
         self.confirmed = False                          # has a "start" been emitted
         self.in_speech = False
+        self.paused = False                             # a "pause" went out for the current silence
 
     @property
     def neg_threshold(self) -> float:
@@ -153,6 +158,7 @@ class Segmenter:
         if p >= self.neg_threshold:
             self.speech_ms += FRAME_MS
             self.silence_ms = 0
+            self.paused = False                     # talking again: that pause wasn't the end
         else:
             self.silence_ms += FRAME_MS
 
@@ -164,6 +170,11 @@ class Segmenter:
                 self._reset()                       # a blip, not speech
                 return events
 
+        if (cfg.early and self.confirmed and not self.paused
+                and cfg.speech_pad_ms <= self.silence_ms < cfg.min_silence_ms):
+            self.paused = True
+            audio = self._trimmed()
+            events.append(Event("pause", self._ms(self.seg_start), self._ms(self.seg_start + len(audio)), audio))
         if self.confirmed and self.silence_ms >= cfg.min_silence_ms:
             events += self._end(forced=False, trim_silence=True)
         elif self.confirmed and self._ms(self.pos - self.seg_start) >= cfg.max_segment_s * 1000:
@@ -176,18 +187,21 @@ class Segmenter:
         return events
 
     def _end(self, forced: bool, trim_silence: bool) -> list[Event]:
-        frames = self.frames
-        if trim_silence:
-            # keep speech_pad_ms of the trailing silence, drop the rest
-            drop = max(0, (self.silence_ms - self.cfg.speech_pad_ms) // FRAME_MS)
-            frames = frames[: len(frames) - drop] if drop else frames
-        audio = np.concatenate(frames) if frames else np.zeros(0, np.float32)
+        audio = self._trimmed() if trim_silence else (
+            np.concatenate(self.frames) if self.frames else np.zeros(0, np.float32))
         ev = Event("end", self._ms(self.seg_start), self._ms(self.seg_start + len(audio)), audio, forced)
         self._reset()
         return [ev] if len(audio) else []
 
+    def _trimmed(self) -> np.ndarray:
+        """The segment with speech_pad_ms of its trailing silence kept, the rest dropped."""
+        frames = self.frames
+        drop = max(0, (self.silence_ms - self.cfg.speech_pad_ms) // FRAME_MS)
+        frames = frames[: len(frames) - drop] if drop else frames
+        return np.concatenate(frames) if frames else np.zeros(0, np.float32)
+
     def _reset(self):
         self.frames = []
-        self.in_speech = self.confirmed = False
+        self.in_speech = self.confirmed = self.paused = False
         self.speech_ms = self.silence_ms = 0
         self.pre_roll.clear()

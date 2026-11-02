@@ -9,9 +9,16 @@ talking, the utterance so far is re-transcribed every half second for live capti
 A stream emits the same events a streaming ASR would:
   {"type": "speech_start", "segment_id", "start_ms"}
   {"type": "partial", "segment_id", "text"}
-  {"type": "final", "segment_id", "text", "start_ms", "end_ms", "forced", "decode_ms"}
+  {"type": "early", "segment_id", "text"}
+  {"type": "final", "segment_id", "text", "start_ms", "end_ms", "forced", "decode_ms", "early"}
   {"type": "error", "segment_id", "message"}
 Timestamps are milliseconds of this stream's audio.
+
+Early transcripts (S2S_EARLY=1, on): ~0.2 s into a pause the utterance so far is transcribed
+while the voice detector waits out the rest of the pause (S2S_VAD_MIN_SILENCE_MS). An "early"
+event carries that text so translation can start; if the pause turns out to be the end of the
+utterance, the final reuses that transcription (the audio is the same), so it adds no time. If
+the speaker carries on, it is dropped.
 """
 from __future__ import annotations
 
@@ -33,6 +40,7 @@ log = logging.getLogger("s2s.asr")
 ASR_URL = os.environ.get("ASR_URL", "http://127.0.0.1:8001")         # the NIM's HTTP API
 PARTIAL_INTERVAL_S = float(os.environ.get("S2S_ASR_PARTIAL_INTERVAL_S", "0.5"))
 MAX_SEGMENT_S = 15.0            # force a cut in a monologue so finals keep coming
+EARLY = os.environ.get("S2S_EARLY", "1") == "1"
 _vad: SileroVAD | None = None
 
 
@@ -73,12 +81,13 @@ class AsrStream:
     def __init__(self, http: aiohttp.ClientSession, lang: str, partials: bool, min_silence_ms: int):
         self.http, self.lang, self.partials = http, lang, partials
         self.seg = Segmenter(shared_vad(), SegmenterConfig(min_silence_ms=min_silence_ms,
-                                                           max_segment_s=MAX_SEGMENT_S))
+                                                           max_segment_s=MAX_SEGMENT_S, early=EARLY))
         self.events: asyncio.Queue[dict] = asyncio.Queue()
         self.segment_id = 0
         self.last_partial_at = 0          # samples into the utterance when the last partial was taken
         self.partial_task: asyncio.Task | None = None
         self.final_chain: asyncio.Task | None = None
+        self.early: dict | None = None    # the current pause's transcription: {"seg", "n", "task"}
 
     def feed(self, pcm16: bytes):
         x = np.frombuffer(pcm16, np.int16).astype(np.float32) / 32768.0
@@ -88,20 +97,52 @@ class AsrStream:
                 self.last_partial_at = 0
                 self.events.put_nowait({"type": "speech_start", "segment_id": self.segment_id,
                                         "start_ms": ev.start_ms})
+            elif ev.kind == "pause":
+                self._drop_early()
+                self._start_early(self.segment_id, ev.audio)
             else:
-                self._final(self.segment_id, ev)
+                early = self.early
+                if early and early["seg"] == self.segment_id and early["n"] == len(ev.audio):
+                    self.early = None             # the pause was the end: its transcription is the final
+                else:
+                    self._drop_early()
+                    early = None
+                self._final(self.segment_id, ev, early)
+        if self.early and self.early["seg"] == self.segment_id and not self.seg.paused:
+            self._drop_early()                    # talking again
         if self.partials:
             self._maybe_partial()
 
     def close(self):
+        self._drop_early()
         for t in (self.partial_task, self.final_chain):
             if t is not None:
                 t.cancel()
+
+    def _start_early(self, seg_id: int, audio: np.ndarray):
+        entry = {"seg": seg_id, "n": len(audio)}
+
+        async def run():
+            result = await transcribe(self.http, audio, self.lang)
+            if result[0] and not entry.get("dropped"):  # announced before a final that reuses it
+                self.events.put_nowait({"type": "early", "segment_id": seg_id, "text": result[0]})
+            return result
+        entry["task"] = asyncio.create_task(run())
+        entry["task"].add_done_callback(lambda t: t.cancelled() or t.exception())
+        self.early = entry
+
+    def _drop_early(self):
+        if self.early is not None:
+            self.early["dropped"] = True
+            self.early["task"].cancel()
+            self.early = None
 
     def _maybe_partial(self):
         audio = self.seg.current_audio()
         if audio is None or len(audio) - self.last_partial_at < PARTIAL_INTERVAL_S * SR:
             return
+        if self.seg.silence_ms > 0:       # the speaker has gone quiet: keep the recogniser free for the
+            return                        # early transcription (it takes one request at a time)
         if self.partial_task is not None and not self.partial_task.done():
             return                        # one partial in flight per caller; skip, don't queue
         self.last_partial_at = len(audio)
@@ -117,14 +158,22 @@ class AsrStream:
         if text and seg_id == self.segment_id and self.seg.current_audio() is not None:
             self.events.put_nowait({"type": "partial", "segment_id": seg_id, "text": text})
 
-    def _final(self, seg_id: int, ev):
+    def _final(self, seg_id: int, ev, early: dict | None = None):
         prev = self.final_chain
 
         async def run():
             try:
-                text, ms = await transcribe(self.http, ev.audio, self.lang)
+                text = None
+                if early is not None:
+                    try:
+                        text, ms = await early["task"]
+                    except Exception:  # noqa: BLE001 - transcribe it again below
+                        text = None
+                if text is None:
+                    text, ms = await transcribe(self.http, ev.audio, self.lang)
                 msg = {"type": "final", "segment_id": seg_id, "text": text, "start_ms": ev.start_ms,
-                       "end_ms": ev.end_ms, "forced": ev.forced, "decode_ms": round(ms, 1)}
+                       "end_ms": ev.end_ms, "forced": ev.forced, "decode_ms": round(ms, 1),
+                       "early": early is not None}
             except Exception as e:  # noqa: BLE001 - one failed utterance doesn't end the stream
                 log.exception("transcription of segment %d failed", seg_id)
                 msg = {"type": "error", "segment_id": seg_id, "message": f"transcription failed: {e}"}
