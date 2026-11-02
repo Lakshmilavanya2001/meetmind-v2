@@ -19,6 +19,11 @@ while the voice detector waits out the rest of the pause (S2S_VAD_MIN_SILENCE_MS
 event carries that text so translation can start; if the pause turns out to be the end of the
 utterance, the final reuses that transcription (the audio is the same), so it adds no time. If
 the speaker carries on, it is dropped.
+
+Wrong-language text: Parakeet ignores the language it is sent and detects one itself, and on
+short or unclear speech it now and then picks a language nobody in the call speaks (Hindi or
+English heard as Russian or Japanese). Text whose letters are mostly in a script other than the
+speaker's language's or Latin is dropped (see expected_script).
 """
 from __future__ import annotations
 
@@ -27,12 +32,13 @@ import io
 import logging
 import os
 import time
+import unicodedata
 import wave
 
 import aiohttp
 import numpy as np
 
-from .languages import ASR_CODE
+from .languages import ASR_CODE, SCRIPT
 from .vad import SR, Segmenter, SegmenterConfig, SileroVAD
 
 log = logging.getLogger("s2s.asr")
@@ -62,6 +68,31 @@ def wav_bytes(audio: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
+INDIC_SCRIPTS = set(SCRIPT.values()) - {"LATIN"}
+FOREIGN_SHARE = 0.3             # this much of the letters in another script: the whole text is wrong
+
+
+def _script(ch: str) -> str | None:
+    """The script of a letter (None for spaces, digits and punctuation)."""
+    return unicodedata.name(ch, "?").split()[0] if unicodedata.category(ch)[0] in "LM" else None
+
+
+def expected_script(text: str, lang: str) -> str:
+    """The text without words in a script the speaker's language doesn't use; "" when most of it is.
+    Latin is always fine (English, and English words in Indian speech). English speech may also come
+    back partly in an Indian script; the agent puts those words back into English (english_only)."""
+    ok = {SCRIPT.get(lang, "LATIN"), "LATIN"} | (INDIC_SCRIPTS if lang == "en" else set())
+    words = text.split()
+    bad = [any((s := _script(ch)) is not None and s not in ok for ch in w) for w in words]
+    letters = [s for ch in text if (s := _script(ch)) is not None]
+    if not letters or not any(bad):
+        return text
+    foreign = sum(s not in ok for s in letters) / len(letters)
+    if foreign >= FOREIGN_SHARE:
+        return ""
+    return " ".join(w for w, b in zip(words, bad) if not b)
+
+
 async def transcribe(http: aiohttp.ClientSession, audio: np.ndarray, lang: str) -> tuple[str, float]:
     """One offline request: 16 kHz float32 audio -> (text, milliseconds taken)."""
     form = aiohttp.FormData()
@@ -72,7 +103,12 @@ async def transcribe(http: aiohttp.ClientSession, audio: np.ndarray, lang: str) 
         if r.status != 200:
             raise RuntimeError(f"ASR: HTTP {r.status} {(await r.text())[:200]}")
         res = await r.json(content_type=None)
-    return (res.get("text") or "").strip(), (time.perf_counter() - t0) * 1000
+    raw = (res.get("text") or "").strip()
+    text = expected_script(raw, lang)
+    if text != raw:
+        log.info("recogniser answered in another language (%s) for %s speech; %s",
+                 res.get("language_code"), lang, "dropped" if not text else "kept the rest")
+    return text, (time.perf_counter() - t0) * 1000
 
 
 class AsrStream:
